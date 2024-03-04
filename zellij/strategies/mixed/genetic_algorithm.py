@@ -28,7 +28,6 @@ creator.create("Individual", list, fitness=creator.FitnessMin)  # type: ignore
 
 
 class GeneticAlgorithm(Metaheuristic):
-
     """GeneticAlgorithm
 
     GeneticAlgorithm (GA) implements a usual genetic algorithm.
@@ -247,6 +246,7 @@ class GeneticAlgorithm(Metaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of GA.
@@ -356,7 +356,6 @@ class GeneticAlgorithm(Metaheuristic):
 
 
 class SteadyStateGA(Metaheuristic):
-
     """SteadyStateGA
 
     Steady State genetic algorithm.
@@ -599,6 +598,7 @@ class SteadyStateGA(Metaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of GA.

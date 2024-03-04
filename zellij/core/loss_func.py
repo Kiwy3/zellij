@@ -150,6 +150,9 @@ class LossFunc(ABC):
         #############
         # VARIABLES #
         #############
+
+        self.info = None
+
         self.best_score = float("inf")
         self.best_point = None
 
@@ -199,6 +202,23 @@ class LossFunc(ABC):
             self.best_sec_constraint = None
 
     @property
+    def info(self) -> Optional[List[str]]:
+        return self._info
+
+    @info.setter
+    def info(self, value: Optional[List[str]]):
+        self._info = value
+        if value:
+            self.best_info = np.array([float("inf")] * len(value), dtype=float)
+            if self.secondary:
+                self.best_sec_info = np.array(
+                    [[float("inf")] * len(value)] * len(self.secondary), dtype=float
+                )
+        else:
+            self.best_info = None
+            self.best_sec_info = None
+
+    @property
     def save(self) -> bool:
         return self._save
 
@@ -234,9 +254,13 @@ class LossFunc(ABC):
         pass
 
     @abstractmethod
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
         pass
 
     def _compute_loss(self, point: list):
@@ -399,8 +423,9 @@ class LossFunc(ABC):
         x: list,
         secondary: np.ndarray,
         constraint: Optional[np.ndarray] = None,
-        csummed: Optional[float] = None,
-        bsummed: Optional[float] = None,
+        info: Optional[np.ndarray] = None,
+        csummed: Optional[float] = None,  # sum of constraints c_i < 0
+        bsummed: Optional[float] = None,  # best sum of constraint c_i < 0
     ):
         for i, y in enumerate(secondary):
             sc_bool = y < self.best_sec_score[i]  # type: ignore
@@ -409,9 +434,11 @@ class LossFunc(ABC):
                     self.best_sec_constraint[i] = constraint  # type: ignore
                     self.best_sec_score[i] = y  # type: ignore
                     self.best_sec_point[i] = list(x)[:]  # type: ignore
+                    self.best_sec_info[i] = info  # type: ignore
             elif sc_bool:
                 self.best_sec_score[i] = y  # type: ignore
                 self.best_sec_point[i] = list(x)[:]  # type: ignore
+                self.best_sec_info[i] = info  # type: ignore
 
     # Save best found solution
     def _save_best(
@@ -420,6 +447,7 @@ class LossFunc(ABC):
         y: float,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         """_save_best
 
@@ -431,10 +459,12 @@ class LossFunc(ABC):
             Set of hyperparameters (a solution)
         y : {float, int}
             Loss value (score) associated to x.
-        secondary : list[{float,int}], default=None
+        secondary : np.ndarray, optional
             Secondary objectives.
-        constraint : list[{float, int}], default=None
+        constraint : np.ndarray, optional
             Constraints values.
+        info : np.ndarray, optional
+            Info values.
         """
 
         sc_bool = y < self.best_score
@@ -454,6 +484,7 @@ class LossFunc(ABC):
                     self.best_constraint = constraint
                     self.best_score = y
                     self.best_point = list(x)[:]
+                    self.best_info = info
                     if self.secondary:
                         if secondary is None:
                             raise InputError(
@@ -461,18 +492,19 @@ class LossFunc(ABC):
                             )
                         else:
                             self._check_secondary(
-                                x, secondary, constraint, summed, bsummed
+                                x, secondary, constraint, info, summed, bsummed
                             )
         elif sc_bool:
             self.best_score = y
             self.best_point = list(x)[:]
+            self.best_info = info
             if self.secondary:
                 if secondary is None:
                     raise InputError(
                         f"In LossFunc, secondary values are expected. Got {secondary} "
                     )
                 else:
-                    self._check_secondary(x, secondary)
+                    self._check_secondary(x, secondary, info=info)
 
         self.calls += 1
 
@@ -522,6 +554,7 @@ class LossFunc(ABC):
 
         self.secondary = self.secondary
         self.constraint = self.constraint
+        self.info = self.info
 
         self.calls = 0
 
@@ -576,9 +609,13 @@ class SequentialLoss(LossFunc):
             kwargs_mode=kwargs_mode,
         )
 
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
         """__call__
 
         Evaluate a list X of solutions with the original loss function.
@@ -615,6 +652,11 @@ class SequentialLoss(LossFunc):
         else:
             list_secondary = None
 
+        if self.info:
+            list_info = np.ones((len(X), len(self.info)), dtype=float)
+        else:
+            list_info = None
+
         idx = 0
         while idx < len(X) and not stopping():
             x = X[idx]
@@ -627,11 +669,18 @@ class SequentialLoss(LossFunc):
                 current_sec = list_secondary[idx]  # type: ignore
             else:
                 current_sec = None
+
             if self.constraint:
                 list_constraint[idx] = [outputs[k] for k in self.constraint]  # type: ignore
                 current_con = list_constraint[idx]  # type: ignore
             else:
                 current_con = None
+
+            if self.info:
+                list_info[idx] = [kwargs[k] for k in self.info]  # type: ignore
+                current_info = list_constraint[idx]  # type: ignore
+            else:
+                current_info = None
 
             # Saving
             if self.save:
@@ -647,11 +696,12 @@ class SequentialLoss(LossFunc):
                 outputs["objective0"],
                 secondary=current_sec,
                 constraint=current_con,
+                info=current_info,
             )
 
             idx += 1
 
-        return X, y, list_secondary, list_constraint
+        return X, y, list_secondary, list_constraint, list_info
 
     def _save_model(self, mid: int, trained_model: object):
         # Save model into a file if it is better than the best found one
@@ -919,11 +969,15 @@ class MPILoss(LossFunc):
                     """
             )
 
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
-        new_x, score, secondary, constraints = self._strategy(X, stop_obj=stop_obj, **kwargs)  # type: ignore
-        return new_x, score, secondary, constraints
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
+        new_x, score, secondary, constraints, info = self._strategy(X, stop_obj=stop_obj, **kwargs)  # type: ignore
+        return new_x, score, secondary, constraints, info
 
     def master(
         self, pqueue: Optional[Queue] = None, stop_obj: Optional[Stopping] = None
@@ -1161,12 +1215,17 @@ class _Parallel_strat:
         outputs: dict,
         secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
-        info: dict,
+        info: Optional[np.ndarray],
+        info_dict: dict,
         source: int,
     ):
         # Save score and solution into the object
         self._lf._save_best(
-            point, outputs["objective0"], secondary=secondary, constraint=constraint
+            point,
+            outputs["objective0"],
+            secondary=secondary,
+            constraint=constraint,
+            info=info,
         )
 
         if self._lf.save:
@@ -1174,15 +1233,28 @@ class _Parallel_strat:
             self._lf._save_model(outputs["objective0"], source)
 
             # Save score and solution into a file
-            self._lf._save_file(point, **outputs, **info)
+            self._lf._save_file(point, **outputs, **info_dict)
 
 
 # Mono Synchrone -> Save score return list of score
 class _MonoSynchronous_strat(_Parallel_strat):
+    def __init__(self, loss: MPILoss, master_rank: int, **kwargs):
+        super().__init__(loss, master_rank, **kwargs)
+
+        self.y = np.empty(1, dtype=float)  # Initialized during call
+        self.list_secondary = None  # Initialized during call
+        self.list_constraint = None  # Initialized during call
+        self.list_info = None  # Initialized during call
+
     # Executed by Experiment to compute X
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
+
         pqueue = Queue()
         for id, x in enumerate(X):
             pqueue.put((x, id, kwargs, None))
@@ -1203,14 +1275,19 @@ class _MonoSynchronous_strat(_Parallel_strat):
         else:
             self.list_constraint = None
 
+        if self._lf.info:
+            self.list_info = np.ones((len(X), len(self._lf.info)), dtype=float)
+        else:
+            self.list_info = None
+
         self._lf.master(pqueue, stop_obj=stop_obj)
 
-        return X, self.y, self.list_secondary, self.list_constraint
+        return X, self.y, self.list_secondary, self.list_constraint, self.list_info
 
     # Executed by master when it receives a score from a worker
     # Here Meta master and loss master are the same process, so shared memory
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info: dict, source: int
+        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
     ) -> bool:
         self.y[id] = outputs["objective0"]
 
@@ -1234,12 +1311,19 @@ class _MonoSynchronous_strat(_Parallel_strat):
         else:
             constraint = None
 
+        if self._lf.info:
+            info = np.array([info_dict[k] for k in self._lf.info], dtype=float)
+            self.list_info[id] = info  # type: ignore
+        else:
+            info = None
+
         self._do_save(
             point=point,
             outputs=outputs,
             secondary=secondary,
             constraint=constraint,
             info=info,
+            info_dict=info_dict,
             source=source,
         )
 
@@ -1268,6 +1352,7 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         self._computed_y = None
         self._computed_secondary = None
         self._computed_constraint = None
+        self._computed_info = None
 
     # send a point to loss master
     def _send_to_master(self, point: list, **kwargs):
@@ -1277,9 +1362,13 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         self._computed += 1
 
     # Executed by Experiment to compute X
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
         # send point, point ID and point info
         for point in X:
             self._send_to_master(point, **kwargs)  # send point
@@ -1306,11 +1395,16 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         else:
             constraint = None
 
-        return [new_x], np.array([y], dtype=float), secondary, constraint
+        if self._computed_info is not None:
+            info = np.array([self._computed_info.copy()], dtype=float)
+        else:
+            info = None
+
+        return [new_x], np.array([y], dtype=float), secondary, constraint, info
 
     # Executed by master when it receives a score from a worker
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info: dict, source: int
+        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
     ) -> bool:
         y = outputs["objective0"]
         if self._lf.secondary:
@@ -1318,7 +1412,8 @@ class _MonoAsynchronous_strat(_Parallel_strat):
                 [
                     outputs[f"objective{i}"]
                     for i in range(1, len(self._lf.secondary) + 1)
-                ]
+                ],
+                dtype=float,
             )
         else:
             secondary = None
@@ -1330,12 +1425,18 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         else:
             constraint = None
 
+        if self._lf.info:
+            info = np.array([info_dict[k] for k in self._lf.info], dtype=float)
+        else:
+            info = None
+
         self._do_save(
             point=point,
             outputs=outputs,
             secondary=secondary,
             constraint=constraint,
             info=info,
+            info_dict=info_dict,
             source=source,
         )
 
@@ -1343,6 +1444,7 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         self._computed_y = y
         self._computed_secondary = secondary
         self._computed_constraint = constraint
+        self._computed_info = info
 
         return False
 
@@ -1356,6 +1458,7 @@ class _MonoFlexible_strat(_Parallel_strat):
         self._flex_y = []
         self._flex_s = []
         self._flex_c = []
+        self._flex_i = []
 
         # When queue size is < threshold, the loss master stop, so meta can return new points
         self.threshold = threshold
@@ -1368,13 +1471,18 @@ class _MonoFlexible_strat(_Parallel_strat):
         self._computed += 1
 
     # Executed by Experiment to compute X
-    def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
-    ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+        list,
+        np.ndarray,
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ]:
         self._flex_x = []
         self._flex_y = []
         self._flex_s = []
         self._flex_c = []
+        self._flex_i = []
 
         # send point, point ID and point info
         for point in X:
@@ -1392,11 +1500,22 @@ class _MonoFlexible_strat(_Parallel_strat):
         else:
             constraint = None
 
-        return self._flex_x, np.array(self._flex_y, dtype=float), secondary, constraint
+        if self._lf.info:
+            info = np.array(self._flex_i, dtype=float)
+        else:
+            info = None
+
+        return (
+            self._flex_x,
+            np.array(self._flex_y, dtype=float),
+            secondary,
+            constraint,
+            info,
+        )
 
     # Executed by master when it receives a score from a worker
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info: dict, source: int
+        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
     ) -> bool:
         logger.debug(
             f"FLEXIBLE: {len(self._flex_x)},{len(self._flex_y)},{len(self._flex_c)} | SIZE : {self._lf.pqueue.qsize()} <= {self.threshold}"
@@ -1423,12 +1542,19 @@ class _MonoFlexible_strat(_Parallel_strat):
         else:
             constraint = None
 
+        if self._lf.info:
+            info = np.array([info_dict[k] for k in self._lf.info], dtype=float)
+            self._flex_i.append(info)
+        else:
+            info = None
+
         self._do_save(
             point=point,
             outputs=outputs,
             secondary=secondary,
             constraint=constraint,
             info=info,
+            info_dict=info_dict,
             source=source,
         )
         return self._lf.pqueue.qsize() >= self.threshold

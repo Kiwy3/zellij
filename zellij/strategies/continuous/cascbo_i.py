@@ -474,6 +474,7 @@ class CASCBOI(UnitMetaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """forward
 
@@ -489,6 +490,9 @@ class CASCBOI(UnitMetaheuristic):
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
         constraint : np.ndarray, optional
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
+        info : np.ndarray, optional
+            :code:`info` numpy ndarray of floats. Mandatory information from the :ref:`meta` and linked to the solution.
+            Used oly if :ref:`meta`, requires specific informations that were linked to a solution during a previous :code:`forward`.
 
         Returns
         -------
@@ -500,7 +504,7 @@ class CASCBOI(UnitMetaheuristic):
         torch.cuda.empty_cache()
 
         if self.turbo_state.restart_triggered:
-            self.initialized = False
+            # self.initialized = False
             self.turbo_state.reset()
 
         if not self.initialized:
@@ -531,7 +535,6 @@ class CASCBOI(UnitMetaheuristic):
                 )
                 self.cmodels_list = [None] * self.nconstraint
 
-            torch.cuda.empty_cache()
             self.iterations += 1
 
             new_x = torch.tensor(X, dtype=self.dtype, device=self.device)
@@ -650,13 +653,18 @@ class CASCBOI(UnitMetaheuristic):
 
                         except ModelFittingError:
                             logger.warning(
-                                f"In SCBO, ModelFittingError for constraint{i}, previous fitted model will be used."
+                                f"In CASCBO, ModelFittingError for constraint{i}, previous fitted model will be used."
                             )
 
                     # Update Cost model
-                    cost_model = CostModelGP(
-                        self.train_x, self.train_cost, self.device, self.dtype
-                    )
+                    try:
+                        self.cost_model = CostModelGP(
+                            self.train_x, self.train_cost, self.device, self.dtype
+                        )
+                    except ModelFittingError:
+                        logger.warning(
+                            f"In CASCBO, ModelFittingError for Cost, previous fitted model will be used."
+                        )
 
                     # optimize and get new observation
                     violation = self.train_c.sum(dim=1)
@@ -693,7 +701,7 @@ class CASCBOI(UnitMetaheuristic):
                         batch_size=self.batch_size,
                         n_candidates=self.n_candidates,
                         constraint_model=ModelListGP(*self.cmodels_list),
-                        cost_model=cost_model,
+                        cost_model=self.cost_model,
                         best_obj=best_obj,
                         best_cost=best_cost,
                         alpha=alpha,

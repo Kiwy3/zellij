@@ -18,7 +18,6 @@ logger = logging.getLogger("zellij.DEFAULT")
 
 
 class Default(Metaheuristic):
-
     """Default
 
     Evaluate a given list of solutions.
@@ -112,6 +111,7 @@ class Default(Metaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of CGS.

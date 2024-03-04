@@ -25,7 +25,6 @@ logger = logging.getLogger("zellij.DBA")
 
 
 class DBA(Metaheuristic):
-
     """DBA
 
     DBA works in the unit hypercube.
@@ -300,6 +299,7 @@ class DBA(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of ILS.
@@ -394,7 +394,6 @@ class DBA(Metaheuristic):
 
 
 class DBADirect(Metaheuristic):
-
     """DBA
 
     DBA works in the unit hypercube.
@@ -654,6 +653,7 @@ class DBADirect(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of ILS.

@@ -111,6 +111,7 @@ class PHS(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of PHS.

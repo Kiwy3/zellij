@@ -21,7 +21,6 @@ logger = logging.getLogger("zellij.CO")
 
 
 class CGS(ContinuousMetaheuristic):
-
     """
     CGS is an exploration :ref:`meta` using chaos to violently move in the :ref:`sp`.
     It uses a :ref:`cmap`, such as Henon or Kent map.
@@ -132,6 +131,7 @@ class CGS(ContinuousMetaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of CGS.
@@ -180,7 +180,6 @@ class CGS(ContinuousMetaheuristic):
 
 
 class CLS(ContinuousMetaheuristic):
-
     """
     CLS is an exploitation :ref:`meta` using chaos to wiggle points arround an initial solution.
     It uses a rotating polygon to distribute those points, a progressive and mooving zoom on the best solution found, to refine it.
@@ -304,6 +303,7 @@ class CLS(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of CLS.
@@ -400,7 +400,6 @@ class CLS(ContinuousMetaheuristic):
 
 
 class CFS(ContinuousMetaheuristic):
-
     """
     CFS is an exploitation :ref:`meta` using chaos to wiggle points arround an initial solution.\
     Contrary to CLS, CFS uses an exponential zoom on the best solution found, it works at a much smaller scale than the CLS.
@@ -533,6 +532,7 @@ class CFS(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """forward
 
@@ -609,7 +609,6 @@ class CFS(ContinuousMetaheuristic):
 
 
 class ChaoticOptimization(ContinuousMetaheuristic):
-
     """ChaoticOptimization
 
     Chaotic optimization combines CGS, CLS and CFS.
@@ -798,6 +797,7 @@ class ChaoticOptimization(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         """forward
 

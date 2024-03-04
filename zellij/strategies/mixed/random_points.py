@@ -20,7 +20,6 @@ logger = logging.getLogger("zellij.RD")
 
 
 class Random(Metaheuristic):
-
     """Random
 
     Samples random points from  the search space.
@@ -109,6 +108,7 @@ class Random(Metaheuristic):
         Y: Optional[np.ndarray] = None,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of CGS.

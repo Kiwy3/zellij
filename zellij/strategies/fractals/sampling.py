@@ -18,7 +18,6 @@ logger = logging.getLogger("zellij.sampling")
 
 
 class Center(ContinuousMetaheuristic):
-
     """Center
 
     Samples the center of the targeted search space.
@@ -114,6 +113,7 @@ class Center(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.
@@ -142,7 +142,6 @@ class Center(ContinuousMetaheuristic):
 
 
 class CenterSOO(ContinuousMetaheuristic):
-
     """CenterSOO
 
     Samples the center of the targeted search space.
@@ -228,6 +227,7 @@ class CenterSOO(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of CenterSOO.
@@ -262,7 +262,6 @@ class CenterSOO(ContinuousMetaheuristic):
 
 
 class Diagonal(ContinuousMetaheuristic):
-
     """Diagonal
 
     Sample the center of the :ref:`sp`, and two equidistant points
@@ -366,6 +365,7 @@ class Diagonal(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.
@@ -398,7 +398,6 @@ class Diagonal(ContinuousMetaheuristic):
 
 
 class ChaosSampling(ContinuousMetaheuristic):
-
     """ChaosSampling
 
     Sample chaotic points.
@@ -489,6 +488,7 @@ class ChaosSampling(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.
@@ -522,7 +522,6 @@ class ChaosSampling(ContinuousMetaheuristic):
 
 
 class ChaosHypersphere(ContinuousMetaheuristic):
-
     """ChaosHypersphere
 
     Sample chaotic points. Adapted to :code:`Hypersphere`.
@@ -636,6 +635,7 @@ class ChaosHypersphere(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.
@@ -671,7 +671,6 @@ class ChaosHypersphere(ContinuousMetaheuristic):
 
 
 class DirectSampling(ContinuousMetaheuristic):
-
     """DirectSampling
 
     Samples points as in DIRECT algorithms.
@@ -736,6 +735,7 @@ class DirectSampling(ContinuousMetaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.
@@ -782,7 +782,6 @@ class DirectSampling(ContinuousMetaheuristic):
 
 
 class Base(Metaheuristic):
-
     """Base
 
     Sample the base of a PermFractal.
@@ -855,6 +854,7 @@ class Base(Metaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of Center.

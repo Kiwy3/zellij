@@ -22,7 +22,6 @@ logger = logging.getLogger("zellij.SA")
 
 
 class SimulatedAnnealing(Metaheuristic):
-
     """SimulatedAnnealing
 
     SimulatedAnnealing (SA) is a hill climbing exploitation algorithm.
@@ -171,6 +170,7 @@ class SimulatedAnnealing(Metaheuristic):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of SA.

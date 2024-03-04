@@ -18,7 +18,6 @@ logger = logging.getLogger("zellij.ILS")
 
 # Intensive local search
 class ILS(ContinuousMetaheuristic):
-
     """ILS
 
     Intensive local search is an exploitation algorithm comming from the
@@ -230,7 +229,6 @@ class ILS(ContinuousMetaheuristic):
 
 
 class ILSRandom(ILS):
-
     """ILSRandom
 
     Intensive local search is an exploitation algorithm comming from the
@@ -318,6 +316,7 @@ class ILSRandom(ILS):
         Y: np.ndarray,
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """
         Runs one step of ILSRandom.

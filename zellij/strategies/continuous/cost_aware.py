@@ -377,6 +377,7 @@ class CostAwareBO(UnitMetaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
+        info: Optional[np.ndarray] = None,
     ) -> Tuple[List[list], dict]:
         """forward
 

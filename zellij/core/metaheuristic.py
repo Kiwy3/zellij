@@ -34,7 +34,6 @@ except ImportError as err:
 
 
 class Metaheuristic(ABC):
-
     """Metaheuristic
 
     :ref:`meta` is a core object which defines the structure
@@ -70,6 +69,9 @@ class Metaheuristic(ABC):
         # Saving file initialized by Experience
         self._save = ""
 
+        # Keys from additionnal info to pass at each forward
+        self.info = None
+
     @property
     def search_space(self) -> Searchspace:
         return self._search_space
@@ -85,6 +87,7 @@ class Metaheuristic(ABC):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
+        info: Optional[np.ndarray],
     ) -> Tuple[List[list], dict]:
         """forward
 
@@ -100,6 +103,9 @@ class Metaheuristic(ABC):
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
         constraint : np.ndarray, optional
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
+        info : np.ndarray, optional
+            :code:`info` numpy ndarray of floats. Mandatory information from the :ref:`meta` and linked to the solution.
+            Used oly if :ref:`meta`, requires specific informations that were linked to a solution during a previous :code:`forward`.
 
         Returns
         -------
@@ -120,7 +126,6 @@ class Metaheuristic(ABC):
 
 
 class ContinuousMetaheuristic(Metaheuristic):
-
     """ContinuousMetaheuristic
 
     ContinuousMetaheuristic is a subclass of :ref:`meta`, describing a
@@ -160,7 +165,6 @@ class ContinuousMetaheuristic(Metaheuristic):
 
 
 class UnitMetaheuristic(Metaheuristic):
-
     """UnitMetaheuristic
 
     UnitMetaheuristic is a subclass of :ref:`meta`, describing a
@@ -196,7 +200,6 @@ class UnitMetaheuristic(Metaheuristic):
 
 
 class DiscreteMetaheuristic(Metaheuristic):
-
     """DiscreteMetaheuristic
 
     ContinuousMetaheuristic is a subclass of :ref:`meta`, describing a
@@ -266,8 +269,9 @@ class MockMixedMeta(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
+        info: Optional[np.ndarray],
     ) -> Tuple[list, dict]:
-        info = {"algorithm": "MockMeta", "iteration": self.iteration}
+        additionnal = {"algorithm": "MockMeta", "iteration": self.iteration}
         if self.verbose:
             print(
                 f"""
@@ -279,7 +283,7 @@ class MockMixedMeta(Metaheuristic):
                 """
             )
         if self.iteration >= self.iteration_error:
-            return [], info
+            return [], additionnal
         else:
             self.iteration += 1
-            return self.search_space.random_point(self.points), info
+            return self.search_space.random_point(self.points), additionnal
