@@ -1566,7 +1566,7 @@ class SooTreeSearch(TreeSearch):
         if len(self.openl) > 0:
             current_level = self.openl[0].level
             sel_nodes.append(self.openl.pop(0))
-            idx_min = 1
+            vmax = sel_nodes[-1].score
 
             idx = 0
             size = len(self.openl)
@@ -1578,10 +1578,11 @@ class SooTreeSearch(TreeSearch):
                 # (with the lowest score)
                 if node.level != current_level:
                     current_level = node.level
-                    sel_nodes.append(self.openl.pop(idx))
+                    if node.score <= vmax:
+                        sel_nodes.append(self.openl.pop(idx))
+                        vmax = node.score
                     idx -= 1
                     size -= 1
-                    idx_min += 1
 
                 idx += 1
 
