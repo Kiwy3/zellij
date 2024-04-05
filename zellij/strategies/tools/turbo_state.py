@@ -26,6 +26,7 @@ import torch
 from dataclasses import dataclass
 from torch import Tensor
 import numpy as np
+import gc
 
 import logging
 import math
@@ -113,7 +114,9 @@ class CTurboState:
         )
 
     def reset(self):
-        self.best_constraint_values *= torch.inf
+        self.best_constraint_values = (
+            torch.ones_like(self.best_constraint_values) * torch.inf
+        )
         self.length = 0.8
         self.length_min = 0.5**7
         self.length_max = 1.6
@@ -128,55 +131,82 @@ class CTurboState:
         )
 
 
+def get_best_index_for_batch(Y: Tensor, C: Tensor):
+    """Return the index for the best point."""
+    is_feas = (C <= 0).all(dim=-1)
+    if is_feas.any():  # Choose best feasible candidate
+        score = Y.clone()
+        score[~is_feas] = -float("inf")
+        return score.argmax()
+    return C.clamp(min=0).sum(dim=-1).argmin()
+
+
 def update_c_state(state, Y_next, C_next):
-    # Determine which candidates meet the constraints (are valid)
-    bool_tensor = C_next <= 0
-    bool_tensor = torch.all(bool_tensor, dim=-1)
-    Valid_Y_next = Y_next[bool_tensor]
-    Valid_C_next = C_next[bool_tensor]
-    if Valid_Y_next.numel() == 0:  # if none of the candidates are valid
-        # pick the point with minimum violation
-        sum_violation = C_next.sum(dim=-1)
-        min_violation = sum_violation.min()
-        # if the minimum voilation candidate is smaller than the violation of the incumbent
-        if min_violation < state.best_constraint_values.sum():
-            # count a success and update the current best point and constraint values
+    """Method used to update the TuRBO state after each step of optimization.
+
+    Success and failure counters are updated according to the objective values
+    (Y_next) and constraint values (C_next) of the batch of candidate points
+    evaluated on the optimization step.
+
+    As in the original TuRBO paper, a success is counted whenver any one of the
+    new candidate points improves upon the incumbent best point. The key difference
+    for SCBO is that we only compare points by their objective values when both points
+    are valid (meet all constraints). If exactly one of the two points being compared
+    violates a constraint, the other valid point is automatically considered to be better.
+    If both points violate some constraints, we compare them inated by their constraint values.
+    The better point in this case is the one with minimum total constraint violation
+    (the minimum sum of constraint values)"""
+
+    # Pick the best point from the batch
+    best_ind = get_best_index_for_batch(Y=Y_next, C=C_next)
+    y_next, c_next = Y_next[best_ind], C_next[best_ind]
+
+    if (c_next <= 0).all():
+        # At least one new candidate is feasible
+        improvement_threshold = state.best_value + 1e-3 * math.fabs(state.best_value)
+        if y_next > improvement_threshold or (state.best_constraint_values > 0).any():
             state.success_counter += 1
             state.failure_counter = 0
-            # new best is min violator
-            state.best_value = Y_next[sum_violation.argmin()].item()
-            state.best_constraint_values = C_next[sum_violation.argmin()]
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
         else:
-            # otherwise, count a failure
             state.success_counter = 0
             state.failure_counter += 1
-    else:  # if at least one valid candidate was suggested,
-        # throw out all invalid candidates
-        # (a valid candidate is always better than an invalid one)
-
-        # Case 1: if the best valid candidate found has a higher objective value that
-        # incumbent best count a success, the obj valuse has been improved
-        improved_obj = max(Valid_Y_next) > state.best_value + 1e-3 * math.fabs(
-            state.best_value
-        )
-        # Case 2: if incumbent best violates constraints
-        # count a success, we now have suggested a point which is valid and thus better
-        obtained_validity = torch.all(state.best_constraint_values > 0)
-        if improved_obj or obtained_validity:  # If Case 1 or Case 2
-            # count a success and update the best value and constraint values
+    else:
+        # No new candidate is feasible
+        total_violation_next = c_next.clamp(min=0).sum(dim=-1)
+        total_violation_center = state.best_constraint_values.clamp(min=0).sum(dim=-1)
+        if total_violation_next < total_violation_center:
             state.success_counter += 1
             state.failure_counter = 0
-            state.best_value = max(Valid_Y_next).item()
-            state.best_constraint_values = Valid_C_next[Valid_Y_next.argmax()]
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
         else:
-            # otherwise, count a failure
             state.success_counter = 0
             state.failure_counter += 1
 
-    # Finally, update the length of the trust region according to the
-    # updated success and failure counters
+    # Update the length of the trust region according to the success and failure counters
     state = update_tr_length(state)
     return state
+
+
+def iget_best_index_for_batch(Y: Tensor, C: Tensor, Cost: Tensor):
+    """Return the index for the best point."""
+    is_feas = (C <= 0).all(dim=-1)
+    if is_feas.any():  # Choose best feasible candidate
+        score = Y.clone()
+        costs = Cost.clone()
+
+        score[~is_feas] = -float("inf")
+        best_idx = score.argmax()
+        bscore = score[best_idx]
+        mask = score == bscore
+        if len(costs[~mask]) > 1:
+            costs[~mask] = float("inf")
+            best_idx = costs.argmin()
+
+        return best_idx
+    return C.clamp(min=0).sum(dim=-1).argmin()
 
 
 @dataclass
@@ -190,94 +220,119 @@ class ICTurboState:
     failure_counter: int = 0
     failure_tolerance: int = 2
     success_counter: int = 0
-    success_tolerance: int = 1
+    success_tolerance: int = 2
     best_value: float = -float("inf")
+    best_cost: float = float("inf")
     restart_triggered: bool = False
+    best_point: Optional[Tensor] = None
     current_lbounds: Optional[Tensor] = None
     current_ubounds: Optional[Tensor] = None
+    greedy_move: bool = False
 
     def __post_init__(self):
         self.current_lbounds = torch.zeros(self.dim)
         self.current_ubounds = torch.ones(self.dim)
+        self.best_point = torch.zeros(self.dim)
 
     def reset(self):
-        self.best_constraint_values *= torch.inf
         self.length = 0.8
         self.length_min = 0.5**7
         self.length_max = 1.6
         self.failure_counter = 0
         self.failure_tolerance = 2
         self.success_counter = 0
-        self.success_tolerance = 1
-        self.best_value = -float("inf")
+        self.success_tolerance = 2
         self.restart_triggered = False
         self.current_lbounds = torch.zeros(self.dim)
         self.current_ubounds = torch.ones(self.dim)
+        self.greedy_move = False
 
 
-def iupdate_c_state(state, X_next, Y_next, C_next, lengths, successes, failures):
-    # Determine which candidates meet the constraints (are valid)
-    bool_tensor = C_next <= 0
-    bool_tensor = torch.all(bool_tensor, dim=-1)
-    Valid_Y_next = Y_next[bool_tensor]
-    Valid_C_next = C_next[bool_tensor]
-    Valid_X_next = X_next[bool_tensor]
+def iupdate_c_state(
+    state, X_next, Y_next, C_next, Cost_next, lengths, successes, failures, eps=1e-5
+):
 
-    if Valid_Y_next.numel() == 0:  # if none of the candidates are valid
-        # pick the point with minimum violation
-        sum_violation = C_next.sum(dim=-1)
-        min_violation = sum_violation.min()
-        # if the minimum voilation candidate is smaller than the violation of the incumbent
-        if min_violation < state.best_constraint_values.sum():
-            # count a success and update the current best point and constraint values
-            state.success_counter += 1
-            state.failure_counter = 0
-            # new best is min violator
-            state.best_value = Y_next[sum_violation.argmin()].item()
-            state.best_constraint_values = C_next[sum_violation.argmin()]
-        else:
-            # otherwise, count a failure
-            state.success_counter = 0
-            state.failure_counter += 1
-    else:  # if at least one valid candidate was suggested,
+    best_idx = iget_best_index_for_batch(Y_next, C_next, Cost_next)
+    x_next = X_next[best_idx]
+    y_next = Y_next[best_idx]
+    c_next = C_next[best_idx]
+    cost_next = Cost_next[best_idx]
+    l_next = lengths[best_idx]
+    s_next = successes[best_idx]
+    f_next = failures[best_idx]
 
-        in_tr_X = torch.all(
-            (Valid_X_next >= state.current_lbounds)
-            & (Valid_X_next <= state.current_ubounds),
-            dim=-1,
-        )
+    current_lbounds = state.current_lbounds.clone().to(x_next.device)
+    current_ubounds = state.current_ubounds.clone().to(x_next.device)
 
-        argmax = torch.argmax(Valid_Y_next)
+    in_tr_x = torch.all((x_next >= current_lbounds) & (x_next <= current_ubounds))
 
-        # throw out all invalid candidates
-        # (a valid candidate is always better than an invalid one)
-
-        # Case 1: if the best valid candidate found has a higher objective value that
-        # incumbent best count a success, the obj values has been improved
-        improved_obj = Valid_Y_next[argmax] > state.best_value + 1e-3 * math.fabs(
-            state.best_value
-        )
-
-        greedy_move = False
-        # Case 2: if incumbent best violates constraints
-        # count a success, we now have suggested a point which is valid and thus better
-        obtained_validity = torch.all(state.best_constraint_values > 0)
-        if improved_obj or obtained_validity:  # If Case 1 or Case 2
-            # count a success and update the best value and constraint values
-
-            if in_tr_X[argmax]:
+    # Greedy within this context != historic of greedy move in state
+    instant_greedy_move = False
+    next_length = -1
+    if (c_next <= 0).all():
+        # At least one new candidate is feasible
+        p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
+        # In TR
+        if y_next > p_improvement_threshold or (state.best_constraint_values > 0).any():
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            state.best_cost = cost_next.item()
+            if in_tr_x:
+                state.greedy_move = False
                 state.success_counter += 1
                 state.failure_counter = 0
-                state.best_value = Valid_Y_next[argmax].item()
-                state.best_constraint_values = Valid_C_next[Valid_Y_next[argmax]]
             else:
+                state.greedy_move = True
+                instant_greedy_move = True
                 state.success_counter = 0
                 state.failure_counter = 0
-                state.best_value = Valid_Y_next[argmax].item()
-                state.best_constraint_values = Valid_C_next[argmax]
-                greedy_move = True
+                next_length = l_next.item()
+                next_successes = s_next.item()
+        elif (
+            y_next <= p_improvement_threshold
+            and y_next >= state.best_value
+            and cost_next < state.best_cost
+        ):
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            state.best_cost = cost_next.item()
+            if in_tr_x:
+                state.greedy_move = False
+                state.success_counter += 1
+                state.failure_counter = 0
+            else:
+                state.greedy_move = True
+                instant_greedy_move = True
+                state.success_counter = 0
+                state.failure_counter = 0
+                next_length = l_next.item()
+                next_successes = s_next.item()
         else:
-            # otherwise, count a failure
+            state.success_counter = 0
+            state.failure_counter += 1
+    else:
+        # No new candidate is feasible
+        total_violation_next = c_next.clamp(min=0).sum(dim=-1)
+        total_violation_center = state.best_constraint_values.clamp(min=0).sum(dim=-1)
+        if total_violation_next < total_violation_center:
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            state.best_cost = cost_next.item()
+            if in_tr_x:
+                state.greedy_move = False
+                state.success_counter += 1
+                state.failure_counter = 0
+            else:
+                state.greedy_move = True
+                instant_greedy_move = True
+                state.success_counter = 0
+                state.failure_counter = 0
+                next_length = l_next.item()
+                next_successes = s_next.item()
+        else:
             state.success_counter = 0
             state.failure_counter += 1
 
@@ -286,10 +341,12 @@ def iupdate_c_state(state, X_next, Y_next, C_next, lengths, successes, failures)
     # Update the length of the trust region according to
     # success and failure counters
     # (Just as in original TuRBO paper)
-    if greedy_move:
-        state.length = lengths[argmax]
-        state.success_counter = successes[argmax]
-        state.failure_counter = failures[argmax]
+    if instant_greedy_move:
+        state.length = next_length
+        if next_successes > 0:
+            state.success_counter = next_successes + 1
+        else:
+            state.failure_counter = 0
     elif state.success_counter == state.success_tolerance:  # Expand trust region
         state.length = min(2.0 * state.length, state.length_max)
         state.success_counter = 0
@@ -331,7 +388,7 @@ class ConstrainedCostAwareMaxPosteriorSampling(MaxPosteriorSampling):
         objective: Optional[MCAcquisitionObjective] = None,
         posterior_transform: Optional[PosteriorTransform] = None,
         replacement: bool = True,
-        epsilon: float = 1e3,
+        epsilon: float = 1e-3,
     ) -> None:
         r"""Constructor for the SamplingStrategy base class.
 
@@ -509,13 +566,12 @@ class ConstrainedTSPerUnitPosteriorSampling(MaxPosteriorSampling):
         model: Model,
         cost_model: Model,
         constraint_model: Union[ModelListGP, MultiTaskGP],
-        temperature: float,
         best_score: float,
-        best_cost: float,
+        temperature: float,
         objective: Optional[MCAcquisitionObjective] = None,
         posterior_transform: Optional[PosteriorTransform] = None,
         replacement: bool = True,
-        epsilon: float = 1e3,
+        device=torch.device("cpu"),
     ) -> None:
         r"""Constructor for the SamplingStrategy base class.
 
@@ -543,14 +599,25 @@ class ConstrainedTSPerUnitPosteriorSampling(MaxPosteriorSampling):
             posterior_transform=posterior_transform,
             replacement=replacement,
         )
+        self.model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
         self.cost_model = cost_model
+        self.cost_model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
         self.constraint_model = constraint_model
+        self.constraint_model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
         self.temperature = temperature
         self.best_score = best_score
-        self.best_cost = best_cost
-        self.epsilon = epsilon
+        self.device = device
 
-    def _convert_samples_to_scores(self, Y_samples, Cost_samples, C_samples) -> Tensor:
+    def _convert_samples_to_scores(self, Y_samples, C_samples, Cost_samples) -> Tensor:
         r"""Convert the objective and constraint samples into a score.
 
         The logic is as follows:
@@ -615,6 +682,11 @@ class ConstrainedTSPerUnitPosteriorSampling(MaxPosteriorSampling):
             A `batch_shape x num_samples x d`-dim Tensor of samples from `X`, where
                 `X[..., i, :]` is the `i`-th sample.
         """
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Objective function
+        self.model.to(self.device)
         posterior = self.model.posterior(
             X=X,
             observation_noise=observation_noise,
@@ -622,15 +694,26 @@ class ConstrainedTSPerUnitPosteriorSampling(MaxPosteriorSampling):
             posterior_transform=self.posterior_transform,
         )
         Y_samples = posterior.rsample(sample_shape=torch.Size([num_samples]))
+        self.model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Constraints
+        self.constraint_model.to(self.device)
         c_posterior = self.constraint_model.posterior(
             X=X, observation_noise=observation_noise
         )
         C_samples = c_posterior.rsample(sample_shape=torch.Size([num_samples]))
+        self.constraint_model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Cost
-        Cost_samples = self.cost_model(X=X)
+        self.cost_model.to(self.device)
+        Cost_samples = torch.exp(self.cost_model(X).mean)
+        self.cost_model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Convert the objective and constraint samples into a scalar-valued "score"
         scores = self._convert_samples_to_scores(
