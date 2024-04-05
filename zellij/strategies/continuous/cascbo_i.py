@@ -6,13 +6,16 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from zellij.core.errors import InputError
 from zellij.core.metaheuristic import UnitMetaheuristic
-from zellij.strategies.tools.turbo_state import update_c_state
+from zellij.strategies.tools.turbo_state import (
+    iupdate_c_state,
+    iget_best_index_for_batch,
+)
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from zellij.core.search_space import UnitSearchspace
-    from zellij.strategies.tools.turbo_state import CTurboState
+    from zellij.strategies.tools.turbo_state import ICTurboState
 
 import torch
 from torch.quasirandom import SobolEngine
@@ -38,47 +41,13 @@ import numpy as np
 import time
 
 import os
+import gc
+
+from datetime import datetime
 
 import logging
 
 logger = logging.getLogger("zellij.cascbo")
-
-
-class CostModel(torch.nn.Module, ABC):
-    """
-    Simple abstract class for a cost model.
-    """
-
-    @abstractmethod
-    def forward(self, X):
-        pass
-
-
-class CostModelGP(CostModel):
-    """
-    A basic cost model that assumes the cost is positive.
-    It models the log cost to guarantee positive cost predictions.
-    """
-
-    def __init__(self, X, Y_cost, device, dtype):
-        assert torch.all(Y_cost > 0)
-
-        X.to(device, dtype=dtype)
-        Y_cost.to(device, dtype=dtype)
-
-        super().__init__()
-        gp = SingleTaskGP(
-            train_X=X,
-            train_Y=Y_cost,
-            outcome_transform=Log(),
-        )
-        gp.to(device)
-        mll = ExactMarginalLogLikelihood(likelihood=gp.likelihood, model=gp)
-        fit_gpytorch_mll(mll)
-        self.gp = gp
-
-    def forward(self, X):
-        return torch.exp(self.gp(X).mean)
 
 
 class CASCBOI(UnitMetaheuristic):
@@ -171,7 +140,7 @@ class CASCBOI(UnitMetaheuristic):
     def __init__(
         self,
         search_space: UnitSearchspace,
-        turbo_state: CTurboState,
+        turbo_state: ICTurboState,
         batch_size: int,
         budget: float,
         temperature: Temperature,
@@ -229,6 +198,11 @@ class CASCBOI(UnitMetaheuristic):
 
         super().__init__(search_space, verbose)
 
+        ####################
+        # INFO TO RETRIEVE # # See metaheuristic
+        ####################
+        self.info = ["length", "successes", "failures"]
+
         ##############
         # PARAMETERS #
         ##############
@@ -268,10 +242,12 @@ class CASCBOI(UnitMetaheuristic):
         # Number of iterations
         self.iterations = 0
 
-        if gpu:
+        if isinstance(gpu, str):
+            self.device = torch.device(gpu)
+        elif gpu:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
-            self.device = "cpu"
+            self.device = torch.device("cpu")
 
         self.dtype = torch.double
 
@@ -333,8 +309,25 @@ class CASCBOI(UnitMetaheuristic):
 
         logger.debug(self.model_kwargs, self.likelihood_kwargs, self.mll_kwargs)
 
-    def _generate_initial_data(self) -> List[list]:
-        return self.search_space.random_point(self.initial_size)
+    def _generate_initial_data(self, n, alpha) -> List[list]:
+
+        x = self.search_space.random_point(n)
+        if self.lbound_evolv or self.ubound_evolv:
+            x = np.array(x)
+            lbounds = np.zeros(self.search_space.size)
+            ubounds = np.ones(self.search_space.size)
+
+            if self.lbound_evolv:
+                minb = self.lbound_evolv(alpha)
+                lbounds[self.fixed_lbound] = minb
+
+            if self.ubound_evolv:
+                maxb = self.ubound_evolv(alpha)
+                ubounds[self.fixed_ubound] = maxb
+
+            x = (x * (ubounds - lbounds) + lbounds).tolist()
+
+        return x
 
     # Initialize a surrogate
     def _initialize_model(
@@ -343,8 +336,8 @@ class CASCBOI(UnitMetaheuristic):
         train_obj: torch.Tensor,
         state_dict: Optional[dict] = None,
     ):
-        train_x.to(self.device, dtype=self.dtype)
-        train_obj.to(self.device, dtype=self.dtype)
+        train_x = train_x.to(self.device, dtype=self.dtype)
+        train_obj = train_obj.to(self.device, dtype=self.dtype)
 
         likelihood = self.likelihood(**self.likelihood_kwargs)
 
@@ -378,47 +371,95 @@ class CASCBOI(UnitMetaheuristic):
 
         return mll, model
 
+    # Initialize a surrogate
+    def _initialize_cost_model(
+        self,
+        train_x: torch.Tensor,
+        train_obj: torch.Tensor,
+        state_dict: Optional[dict] = None,
+    ):
+        train_x = train_x.to(self.device, dtype=self.dtype)
+        train_obj = train_obj.to(self.device, dtype=self.dtype)
+
+        likelihood = self.likelihood(**self.likelihood_kwargs)
+
+        # define models for objective and constraint
+        model = self.surrogate(
+            train_x,
+            train_obj,
+            likelihood=likelihood,
+            outcome_transform=Log(),
+            **self.model_kwargs,
+        )
+        model.to(self.device)
+
+        if "num_data" in self.mll.__init__.__code__.co_varnames:
+            mll = self.mll(
+                model.likelihood,
+                model.model,
+                num_data=train_x.shape[-2],  # type: ignore
+                **self.mll_kwargs,
+            )
+        else:
+            mll = self.mll(
+                model.likelihood,
+                model,
+                **self.mll_kwargs,
+            )
+
+        # load state dict if it is passed
+        if state_dict is not None:
+            model.load_state_dict(state_dict)
+
+        return mll, model
+
     def generate_batch(
         self,
-        state: CTurboState,
+        state: ICTurboState,
         model,  # GP model
-        X,  # Evaluated points on the domain [0, 1]^d
-        Y,  # Function values
-        batch_size,
-        n_candidates,  # Number of candidates for Thompson sampling
         constraint_model,
         cost_model,
-        best_obj,
-        best_cost,
+        X,  # Evaluated points on the domain [0, 1]^d
+        Y,  # Function values
+        C,  # Function Constraints
+        Cost,  # Function Costs
+        batch_size,
+        n_candidates,  # Number of candidates for Thompson sampling
         alpha,
         current_temp,
     ):
-        assert X.min() >= 0.0 and X.max() <= 1.0 and torch.all(torch.isfinite(Y))
+        assert X.min() >= 0.0 and X.max() <= 1.0
+        assert torch.all(torch.isfinite(Y))
+        assert torch.all(Cost > 0)
+
         if n_candidates is None:
             n_candidates = min(5000, max(2000, 200 * X.shape[-1]))
 
         # Scale the TR to be proportional to the lengthscales
-        x_center = X[Y.argmax(), :].clone()
+        x_center = state.best_point.clone()
+        best_obj = state.best_value
 
         # Add weights based trust region
-        weights = model.covar_module.base_kernel.lengthscale.squeeze().detach()
-        weights = weights / weights.mean()
-        weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
+        # weights = model.covar_module.base_kernel.lengthscale.squeeze().detach()
+        # weights = weights / weights.mean()
+        # weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
         ################################
 
-        tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
+        tr_lb = torch.clamp(x_center - state.length / 2.0, 0.0, 1.0)
         if self.fixed_lbound:
             tr_lb[self.fixed_lbound] = 0.0
             if self.lbound_evolv:
-                ratio = self.lbound_evolv(alpha)
-                tr_lb[self.fixed_ubound] *= ratio
+                tr_lb[self.fixed_lbound] = self.lbound_evolv(alpha)
 
-        tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0)
+        self.turbo_state.current_lbounds = tr_lb
+
+        tr_ub = torch.clamp(x_center + state.length / 2.0, 0.0, 1.0)
         if self.fixed_ubound:
-            tr_lb[self.fixed_ubound] = 1.0
+            tr_ub[self.fixed_ubound] = 1.0
             if self.ubound_evolv:
-                ratio = self.ubound_evolv(alpha)
-                tr_lb[self.fixed_ubound] *= ratio
+                tr_ub[self.fixed_ubound] = self.ubound_evolv(alpha)
+
+        self.turbo_state.current_ubounds = tr_ub
 
         dim = X.shape[-1]
         sobol = SobolEngine(dim, scramble=True)
@@ -443,10 +484,10 @@ class CASCBOI(UnitMetaheuristic):
             model=model,
             constraint_model=constraint_model,
             cost_model=cost_model,
-            temperature=current_temp,
             best_score=best_obj,
-            best_cost=best_cost,
+            temperature=current_temp,
             replacement=False,
+            device=self.device,
         )
 
         with torch.no_grad():  # We don't need gradients when using TS
@@ -467,6 +508,47 @@ class CASCBOI(UnitMetaheuristic):
         self.obj = torch.empty((0, 1), dtype=self.dtype, device=self.device)
         self.train_c = None
         self.train_cost = torch.empty((0, 1), dtype=self.dtype, device=self.device)
+
+    def prune(self, X, Y, constraints, cost):
+        # Remove worst solutions from the beam
+        sidx = torch.argsort(Y.squeeze(), descending=True)
+
+        X = X[sidx]
+        Y = Y[sidx]
+        constraints = constraints[sidx]
+        cost = cost[sidx]
+
+        violation = constraints.sum(dim=1)
+        nvidx = violation < 0
+
+        new_x = X[nvidx][: self.beam]
+        new_obj = Y[nvidx][: self.beam]
+        new_c = constraints[nvidx][: self.beam]
+        new_cost = cost[nvidx][: self.beam]
+
+        if len(new_x) < self.beam:
+            nfill = self.beam - len(new_x)
+            violated = torch.logical_not(nvidx)
+            v_x = X[violated]
+            v_obj = Y[violated]
+            v_c = constraints[violated]
+            v_cost = cost[violated]
+
+            scidx = torch.argsort(violation[violated].squeeze())[:nfill]
+
+            # update training points
+            filled_x = torch.cat([new_x, v_x[scidx]], dim=0)[: self.beam]
+            filled_obj = torch.cat([new_obj, v_obj[scidx]], dim=0)[: self.beam]
+            filled_c = torch.cat([new_c, v_c[scidx]], dim=0)[: self.beam]
+            filled_cost = torch.cat([new_cost, v_cost[scidx]], dim=0)[: self.beam]
+
+        else:
+            filled_x = new_x[: self.beam]
+            filled_obj = new_obj[: self.beam]
+            filled_c = new_c[: self.beam]
+            filled_cost = new_cost[: self.beam]
+
+        return filled_x, filled_obj, filled_c, filled_cost
 
     def forward(
         self,
@@ -501,7 +583,9 @@ class CASCBOI(UnitMetaheuristic):
         info
             Dictionnary of additionnal information linked to :code:`points`.
         """
+        gc.collect()
         torch.cuda.empty_cache()
+        ask_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 
         if self.turbo_state.restart_triggered:
             # self.initialized = False
@@ -509,20 +593,36 @@ class CASCBOI(UnitMetaheuristic):
 
         if not self.initialized:
             # call helper functions to generate initial training data and initialize model
-            train_x = self._generate_initial_data()
+            train_x = self._generate_initial_data(self.initial_size, 0.0)
             self.initialized = True
-            return train_x, {
+            rdict = {
                 "iteration": self.iterations,
                 "algorithm": "InitCASCBOI",
+                "ask_date": ask_date,
+                "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                 "length": 1.0,
+                "successes": 0.0,
+                "failures": 0.0,
                 "trestart": self.turbo_state.restart_triggered,
-                "model": -1,
-                "temperature": -1,
-                "beam": len(self.train_obj),
+                "greedy": self.turbo_state.greedy_move,
+                "best_value": self.turbo_state.best_value,
+                "best_cost": self.turbo_state.best_cost,
             }
-        elif X is None or Y is None or secondary is None or constraint is None:
+            for idx, c in enumerate(self.turbo_state.best_constraint_values):
+                rdict[f"best_c{idx}"] = c.cpu().item()
+            rdict["model"] = -1
+            rdict["temperature"] = -1
+            rdict["beam"] = len(self.train_obj)
+            return train_x, rdict
+        elif (
+            X is None
+            or Y is None
+            or secondary is None
+            or constraint is None
+            or info is None
+        ):
             raise InputError(
-                "After initialization CASCBOI must receive non-empty X, Y, secondary and constraint in forward."
+                "After initialization CASCBOI must receive non-empty X, Y, secondary, constraint and info in forward."
             )
         else:
             if self.train_c is None or self.nconstraint is None:
@@ -547,62 +647,50 @@ class CASCBOI(UnitMetaheuristic):
                 secondary[:, 0], dtype=self.dtype, device=self.device
             ).unsqueeze(-1)
 
+            new_lengths = torch.tensor(
+                info[:, 0], dtype=self.dtype, device=self.device
+            ).unsqueeze(-1)
+            new_successes = torch.tensor(
+                info[:, 1], dtype=self.dtype, device=self.device
+            ).unsqueeze(-1)
+            new_failures = torch.tensor(
+                info[:, 2], dtype=self.dtype, device=self.device
+            ).unsqueeze(-1)
+
             # update training points
             self.train_x = torch.cat([self.train_x, new_x], dim=0)
             self.train_obj = torch.cat([self.train_obj, new_obj], dim=0)
             self.train_c = torch.cat([self.train_c, new_c], dim=0)
             self.train_cost = torch.cat([self.train_cost, new_cost], dim=0)
 
-            # Remove worst solutions from the beam
             if len(self.train_x) > self.beam:
-                sidx = torch.argsort(self.train_obj.squeeze(), descending=True)
-
-                self.train_x = self.train_x[sidx]
-                self.train_obj = self.train_obj[sidx]
-                self.train_c = self.train_c[sidx]
-                self.train_cost = self.train_cost[sidx]
-
-                violation = self.train_c.sum(dim=1)
-                nvidx = violation < 0
-
-                new_x = self.train_x[nvidx][: self.beam]
-                new_obj = self.train_obj[nvidx][: self.beam]
-                new_c = self.train_c[nvidx][: self.beam]
-                new_cost = self.train_cost[nvidx][: self.beam]
-
-                if len(new_x) < self.beam:
-                    nfill = self.beam - len(new_x)
-                    violated = torch.logical_not(nvidx)
-                    v_x = self.train_x[violated]
-                    v_obj = self.train_obj[violated]
-                    v_c = self.train_c[violated]
-                    v_cost = self.train_cost[violated]
-
-                    scidx = torch.argsort(violation[violated].squeeze())[:nfill]
-
-                    # update training points
-                    self.train_x = torch.cat([new_x, v_x[scidx]], dim=0)
-                    self.train_obj = torch.cat([new_obj, v_obj[scidx]], dim=0)
-                    self.train_c = torch.cat([new_c, v_c[scidx]], dim=0)
-                    self.train_cost = torch.cat([new_cost, v_cost[scidx]], dim=0)
-
-                else:
-                    self.train_x = new_x
-                    self.train_obj = new_obj
-                    self.train_c = new_c
-                    self.train_cost = new_cost
+                self.train_x, self.train_obj, self.train_c, self.train_cost = (
+                    self.prune(
+                        self.train_x, self.train_cost, self.train_c, self.train_cost
+                    )
+                )
 
             # If initial size not reached, returns 1 additionnal solution
             if len(self.train_obj) < self.initial_size:
-                return self.search_space.random_point(1), {
+                rdict = {
                     "iteration": self.iterations,
                     "algorithm": "AddInitCASCBOI",
+                    "ask_date": ask_date,
+                    "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                     "length": 1.0,
+                    "successes": 0.0,
+                    "failures": 0.0,
                     "trestart": self.turbo_state.restart_triggered,
-                    "model": -1,
-                    "temperature": -1,
-                    "beam": len(self.train_obj),
+                    "greedy": self.turbo_state.greedy_move,
+                    "best_value": self.turbo_state.best_value,
+                    "best_cost": self.turbo_state.best_cost,
                 }
+                for idx, c in enumerate(self.turbo_state.best_constraint_values):
+                    rdict[f"best_c{idx}"] = c.cpu().item()
+                rdict["model"] = -1
+                rdict["temperature"] = -1
+                rdict["beam"] = len(self.train_obj)
+                return self._generate_initial_data(1, 0.0), rdict
             else:
                 # Compute temperature
                 if self.time_budget:
@@ -614,13 +702,24 @@ class CASCBOI(UnitMetaheuristic):
                 current_temp = 1 - np.clip(self.temperature.temperature(alpha), 0, 1)
 
                 if alpha > self.start_shriking:
-                    self.turbo_state = update_c_state(
-                        state=self.turbo_state, Y_next=new_obj, C_next=new_c
+                    self.turbo_state = iupdate_c_state(
+                        state=self.turbo_state,
+                        X_next=new_x,
+                        Y_next=new_obj,
+                        C_next=new_c,
+                        Cost_next=new_cost,
+                        lengths=new_lengths,
+                        successes=new_successes,
+                        failures=new_failures,
                     )
 
                 with gpytorch.settings.max_cholesky_size(self.cholesky_size):
                     # reinitialize the models so they are ready for fitting on next iteration
                     # use the current state dict to speed up fitting
+
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
                     mll, model = self._initialize_model(
                         self.train_x,
                         self.train_obj,
@@ -629,58 +728,73 @@ class CASCBOI(UnitMetaheuristic):
 
                     try:
                         fit_gpytorch_mll(mll)
+                        gc.collect()
+                        torch.cuda.empty_cache()
                     except ModelFittingError:
-                        return self.search_space.random_point(len(Y)), {
+
+                        rdict = {
                             "iteration": self.iterations,
                             "algorithm": "FailedCASCBOI",
+                            "ask_date": ask_date,
+                            "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                             "length": 1.0,
+                            "successes": 0.0,
+                            "failures": 0.0,
                             "trestart": self.turbo_state.restart_triggered,
-                            "model": -1,
-                            "temperature": current_temp,
-                            "beam": len(self.train_obj),
+                            "greedy": self.turbo_state.greedy_move,
+                            "best_value": self.turbo_state.best_value,
+                            "best_cost": self.turbo_state.best_cost,
                         }
+                        for idx, c in enumerate(
+                            self.turbo_state.best_constraint_values
+                        ):
+                            rdict[f"best_c{idx}"] = c.cpu().item()
+                        rdict["model"] = -1
+                        rdict["temperature"] = current_temp
+                        rdict["beam"] = len(self.train_obj)
+
+                        return self._generate_initial_data(len(Y), 0.0), rdict
+                    model.to("cpu")
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
                     # Update constraint models
-                    for i in range(self.nconstraint):
+                    for icon in range(self.nconstraint):
+                        gc.collect()
+                        torch.cuda.empty_cache()
                         cmll, cmodel = self._initialize_model(
                             self.train_x,
-                            self.train_c[:, i].unsqueeze(-1),
+                            self.train_c[:, icon].unsqueeze(-1),
                             state_dict=None,
                         )
                         try:
                             fit_gpytorch_mll(cmll)
-                            self.cmodels_list[i] = cmodel  # type: ignore
-
+                            cmodel.to("cpu")
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            self.cmodels_list[icon] = cmodel  # type: ignore
                         except ModelFittingError:
                             logger.warning(
-                                f"In CASCBO, ModelFittingError for constraint{i}, previous fitted model will be used."
+                                f"In CASCBOI, ModelFittingError for constraint{icon}, previous fitted model will be used."
                             )
-
                     # Update Cost model
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    cost_mll, cost_model = self._initialize_cost_model(
+                        self.train_x,
+                        self.train_cost,
+                        state_dict=None,
+                    )
                     try:
-                        self.cost_model = CostModelGP(
-                            self.train_x, self.train_cost, self.device, self.dtype
-                        )
+                        fit_gpytorch_mll(cost_mll)
+                        cost_model.to("cpu")
+                        self.cost_model = cost_model
                     except ModelFittingError:
                         logger.warning(
-                            f"In CASCBO, ModelFittingError for Cost, previous fitted model will be used."
+                            f"In CASCBOI, ModelFittingError for Cost, previous fitted model will be used."
                         )
-
-                    # optimize and get new observation
-                    violation = self.train_c.sum(dim=1)
-                    nvidx = violation < 0
-                    if torch.any(nvidx):
-                        print("SOME NON VIOLATED")
-                        best_arg = torch.argmax(self.train_obj[nvidx])
-                        best_obj = self.train_obj[nvidx][best_arg].item()
-                        best_cost = self.train_cost[nvidx][best_arg].item()
-                    else:
-                        print("ALL VIOLATED")
-                        best_arg = torch.argmin(violation)
-                        best_obj = self.train_obj[best_arg].item()
-                        best_cost = self.train_cost[best_arg].item()
-
-                    print(f"BEST COST : {best_cost}")
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
                     # Compute temperature
                     if self.time_budget:
@@ -693,17 +807,19 @@ class CASCBOI(UnitMetaheuristic):
                         self.temperature.temperature(alpha), 0, 1
                     )
 
+                    gc.collect()
+                    torch.cuda.empty_cache()
                     new_x = self.generate_batch(
                         state=self.turbo_state,
                         model=model,
-                        X=self.train_x,
-                        Y=self.train_obj,
-                        batch_size=self.batch_size,
-                        n_candidates=self.n_candidates,
                         constraint_model=ModelListGP(*self.cmodels_list),
                         cost_model=self.cost_model,
-                        best_obj=best_obj,
-                        best_cost=best_cost,
+                        X=self.train_x,
+                        Y=self.train_obj,
+                        C=self.train_c,
+                        Cost=self.train_cost,
+                        batch_size=self.batch_size,
+                        n_candidates=self.n_candidates,
                         alpha=alpha,
                         current_temp=current_temp,
                     )
@@ -711,15 +827,26 @@ class CASCBOI(UnitMetaheuristic):
                     if self._save:
                         self.save(model, self.cmodels_list)
 
-                    return new_x.cpu().numpy().tolist(), {
+                    rdict = {
                         "iteration": self.iterations,
                         "algorithm": "CASCBOI",
+                        "ask_date": ask_date,
+                        "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                         "length": self.turbo_state.length,
+                        "successes": self.turbo_state.success_counter,
+                        "failures": self.turbo_state.failure_counter,
                         "trestart": self.turbo_state.restart_triggered,
-                        "model": self.models_number,
-                        "temperature": current_temp,
-                        "beam": len(self.train_obj),
+                        "greedy": self.turbo_state.greedy_move,
+                        "best_value": self.turbo_state.best_value,
+                        "best_cost": self.turbo_state.best_cost,
                     }
+                    for idx, c in enumerate(self.turbo_state.best_constraint_values):
+                        rdict[f"best_c{idx}"] = c.cpu().item()
+                    rdict["model"] = self.models_number
+                    rdict["temperature"] = current_temp
+                    rdict["beam"] = len(self.train_obj)
+
+                    return new_x.cpu().numpy().tolist(), rdict
 
     def __getstate__(self):
         state = self.__dict__.copy()
