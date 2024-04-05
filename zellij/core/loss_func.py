@@ -363,10 +363,19 @@ class LossFunc(ABC):
             self._create_folder()
 
         # Additionnal header for the outputs file
-        if len(args) > 0:
-            suffix = "," + ",".join(str(e) for e in args)
+        if self.only_score:
+            suffix = "objective0"
+            if self.secondary:
+                suffix += "," + ",".join(
+                    str(f"objective{idx}") for idx in range(1, len(self.secondary) + 1)
+                )
+            if self.constraint:
+                suffix += "," + ",".join(str(f"{con}") for con in self.constraint)
         else:
-            suffix = ""
+            if len(args) > 0:
+                suffix = "," + ",".join(str(e) for e in args)
+            else:
+                suffix = ""
 
         # Create base outputs file for loss func
         self.loss_file = os.path.join(self.outputs_path, "all_evaluations.csv")
@@ -379,7 +388,7 @@ class LossFunc(ABC):
 
         with open(self.loss_file, "w") as f:
             if self.only_score:
-                f.write("objective\n")
+                f.write(f"{suffix}\n")
             else:
                 f.write(",".join(str(e) for e in self.labels) + suffix + "\n")
 
@@ -414,7 +423,18 @@ class LossFunc(ABC):
         # Save a solution and additionnal contents
         with open(self.loss_file, "a+") as f:
             if self.only_score:
-                f.write(f"{kwargs['objective']}\n")
+                header = f"{kwargs['objective0']}"
+                if self.secondary:
+                    header += "," + ",".join(
+                        str(kwargs[f"objective{idx}"])
+                        for idx in range(1, len(self.secondary) + 1)
+                    )
+                if self.constraint:
+                    header += "," + ",".join(
+                        str(kwargs[f"{con}"]) for con in self.constraint
+                    )
+
+                f.write(f"{header}\n")
             else:
                 f.write(",".join(str(e) for e in x) + "," + suffix + "\n")
 
@@ -434,11 +454,13 @@ class LossFunc(ABC):
                     self.best_sec_constraint[i] = constraint  # type: ignore
                     self.best_sec_score[i] = y  # type: ignore
                     self.best_sec_point[i] = list(x)[:]  # type: ignore
-                    self.best_sec_info[i] = info  # type: ignore
+                    if info:
+                        self.best_sec_info[i] = info  # type: ignore
             elif sc_bool:
                 self.best_sec_score[i] = y  # type: ignore
                 self.best_sec_point[i] = list(x)[:]  # type: ignore
-                self.best_sec_info[i] = info  # type: ignore
+                if info:
+                    self.best_sec_info[i] = info  # type: ignore
 
     # Save best found solution
     def _save_best(
@@ -1018,7 +1040,6 @@ class MPILoss(LossFunc):
                 cnt = self._parse_message(
                     msg, self.pqueue, self.p_historic, self.idle, self.status
                 )
-            time.sleep(0.1)
 
         logger.debug(f"MASTER{self.rank}, calls:{self.calls} |!| STOPPING |!|")
 
