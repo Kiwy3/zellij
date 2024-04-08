@@ -126,7 +126,7 @@ class Combined(Stopping):
         return self.op(self.a, self.b)
 
     def __str__(self) -> str:
-        return f"({self.a}{self.str_op}{self.b})"
+        return f"({self.a}\t{self.str_op}\t{self.b})"
 
 
 class Threshold(Stopping):
@@ -206,6 +206,9 @@ class Calls(Threshold):
 
     def __init__(self, loss, threshold):
         super(Calls, self).__init__(loss, "calls", threshold)
+
+    def __str__(self) -> str:
+        return f"|Tc|{self.attribute}:{getattr(self.target, self.attribute)}<={self.threshold:.5f}"
 
 
 class BooleanStop(Stopping):
@@ -323,27 +326,26 @@ class ErrorConvergence(Stopping):
 
         self.denom = 1  # denominator
         self.epsilon = epsilon
-        self.optimum = optimum
+        self.pe = optimum
 
         self._current_pe = float("inf")
+        self._current_best = float("inf")
 
     @property
-    def optimum(self):
-        return self._optimum
+    def pe(self):
+        return self._pe
 
-    @optimum.setter
-    def optimum(self, value):
+    @pe.setter
+    def pe(self, value):
         if value == 0:
-            self.denom = 1
-            self._optimum = value
+            self._pe = lambda x: 100 * x
         else:
-            self.denom = np.abs(value)
-            self._optimum = value
+            self._pe = lambda x: 100 * (x - value) / np.abs(value)
 
     def __call__(self):
-        current_best = getattr(self.target, self.attribute)
-        self._current_pe = 100 * (current_best - self.optimum) / self.denom
+        self._current_best = getattr(self.target, self.attribute)
+        self._current_pe = self.pe(self._current_best)
         return self._current_pe <= self.epsilon
 
     def __str__(self) -> str:
-        return f"|T|Percentage Error:{self._current_pe}<={self.denom}"
+        return f"|T|Percentage Error:{self._current_pe:.5f}<={self.epsilon:.5f} | Best : {self._current_best:.5f}"
