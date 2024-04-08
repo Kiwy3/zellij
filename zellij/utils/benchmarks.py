@@ -1,7 +1,17 @@
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
 # Author Thomas Firmin
 # Email:  thomas.firmin@univ-lille.fr
 # Project: Zellij
 # License: CeCILL-C (http://www.cecill.info/index.fr.html)
+=======
+# @Author: Thomas Firmin <ThomasFirmin>
+# @Date:   2022-05-03T15:41:48+02:00
+# @Email:  thomas.firmin@univ-lille.fr
+# @Project: Zellij
+# @Last modified by:   tfirmin
+# @Last modified time: 2022-10-03T22:38:46+02:00
+# @License: CeCILL-C (http://www.cecill.info/index.fr.html)
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 import numpy as np
 from abc import ABC, abstractmethod
@@ -525,7 +535,13 @@ class Levy(Benchmark):
                 + (y[-1] - 1) ** 2 * (1 + np.sin(2 * np.pi * y[-1]) ** 2)
                 + self.bias
             )
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         }
+=======
+            + (y[-1] - 1) ** 2 * (1 + np.sin(2 * np.pi * y[-1]) ** 2)
+            + self.bias
+        )
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class Brown(Benchmark):
@@ -811,6 +827,7 @@ class Expanded_rosenbrock_griewangk(Benchmark):
 
         lasttmp1 = z[-1] ** 2 - z[0]
         lasttmp2 = z[-1] - 1.0
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         lasttemp = 100 * lasttmp1**2 + lasttmp2**2
         return {
             "obj": (
@@ -821,6 +838,16 @@ class Expanded_rosenbrock_griewangk(Benchmark):
                 + self.bias
             )
         }
+=======
+        lasttemp = 100 * lasttmp1 ** 2 + lasttmp2 ** 2
+        return (
+            np.sum(temp ** 2 / 4000 - np.cos(temp) + 1.0)
+            + lasttemp ** 2 / 4000
+            - np.cos(lasttemp)
+            + 1.0
+            + self.bias
+        )
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class Weierstrass(Benchmark):
@@ -1360,7 +1387,11 @@ class CF9F1_25(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF9F3_25(Benchmark):
@@ -1410,7 +1441,11 @@ class CF9F3_25(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF9F4_25(Benchmark):
@@ -1460,7 +1495,11 @@ class CF9F4_25(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF10F7_25(Benchmark):
@@ -1510,7 +1549,11 @@ class CF10F7_25(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF9F1_75(Benchmark):
@@ -1560,7 +1603,11 @@ class CF9F1_75(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF9F3_75(Benchmark):
@@ -1610,7 +1657,11 @@ class CF9F3_75(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF9F4_75(Benchmark):
@@ -1660,7 +1711,11 @@ class CF9F4_75(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py
 
 
 class CF10F7_75(Benchmark):
@@ -1710,4 +1765,8 @@ class CF10F7_75(Benchmark):
             z = z[self.shuffle]
         idx1 = np.ceil(self.p * len(z)).astype(int)
         z1, z2 = z[0:idx1], z[idx1:]
+<<<<<<< Updated upstream:zellij/utils/benchmarks.py
         return {"obj": self.g1(z1) + self.g2(z2) + self.bias}
+=======
+        return self.g1(z1) + self.g2(z2) + self.bias
+>>>>>>> Stashed changes:lib/zellij/utils/benchmarks.py

@@ -542,9 +542,7 @@ class DBADirect(Metaheuristic):
             self._stop_exploi = value
             self._stop_exploi.target = self
         else:  # if only 1 Stopping
-            raise InitializationError(
-                f"Wrong type for exploitation Stopping. None or Stoppping is required. Got {value}"
-            )
+            self._stop_exploi = None
 
     def reset(self):
         """reset

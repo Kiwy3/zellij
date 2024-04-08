@@ -3,7 +3,11 @@
 # @Email:  thomas.firmin@univ-lille.fr
 # @Project: Zellij
 # @Last modified by:   tfirmin
+<<<<<<< Updated upstream
 # @Last modified time: 2022-12-23T14:49:36+01:00
+=======
+# @Last modified time: 2022-10-03T22:39:31+02:00
+>>>>>>> Stashed changes
 # @License: CeCILL-C (http://www.cecill.info/index.fr.html)
 
 import setuptools
