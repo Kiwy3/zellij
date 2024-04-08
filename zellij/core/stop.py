@@ -7,6 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Callable
 import time
+import numpy as np
 
 
 class Stopping(ABC):
@@ -291,3 +292,58 @@ class Time(Stopping):
     def __str__(self) -> str:
         elapsed = time.time() - self.start_time
         return f"|T|Elapsed Time:{elapsed}>={self.ttime}"
+
+
+class ErrorConvergence(Stopping):
+    """ErrorConvergence
+
+    Stoppping criterion based on convergence of errors. If the best current value within
+    :ref:`lf` and the actual optimum are sufficiently close. Then the optimization is stopped.
+
+    .. math::
+        pe = 100\\times\\frac{f(x)-f^{\\star}}{|f^{\\star}|}
+
+    If :code:`pe` is lower than :code:`epsilon`, then return True.
+
+    Parameters
+    ----------
+    epsilon : float
+        A positive float describing when the stopping criterion should return True.
+    optimum : float
+        Known optimum
+
+    Attributes
+    ----------
+    patience
+
+    """
+
+    def __init__(self, loss, epsilon, optimum):
+        super(ErrorConvergence, self).__init__(loss, "best_score")
+
+        self.denom = 1  # denominator
+        self.epsilon = epsilon
+        self.optimum = optimum
+
+        self._current_pe = float("inf")
+
+    @property
+    def optimum(self):
+        return self._optimum
+
+    @optimum.setter
+    def optimum(self, value):
+        if value == 0:
+            self.denom = 1
+            self._optimum = value
+        else:
+            self.denom = np.abs(value)
+            self._optimum = value
+
+    def __call__(self):
+        current_best = getattr(self.target, self.attribute)
+        self._current_pe = 100 * (current_best - self.optimum) / self.denom
+        return self._current_pe <= self.epsilon
+
+    def __str__(self) -> str:
+        return f"|T|Percentage Error:{self._current_pe}<={self.denom}"

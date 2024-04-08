@@ -14,7 +14,16 @@ from .variables import IntVar, FloatVar, CatVar, ArrayVar, PermutationVar, Varia
 from .objective import Minimizer, Maximizer, Lambda, DoNothing
 
 from .experiment import Experiment
-from .stop import Calls, Convergence, Combined, Threshold, IThreshold, BooleanStop, Time
+from .stop import (
+    Calls,
+    Convergence,
+    Combined,
+    Threshold,
+    IThreshold,
+    BooleanStop,
+    Time,
+    ErrorConvergence,
+)
 from .backup import AutoSave, load_backup
 
 from .metaheuristic import MockMixedMeta
