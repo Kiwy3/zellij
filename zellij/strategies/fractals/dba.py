@@ -206,9 +206,7 @@ class DBA(Metaheuristic):
     # Add more info to ouputs
     def _add_info(self, info: dict) -> dict:
         info["level"] = self.current_subspace.level  # type: ignore
-        info["father"] = self.current_subspace.father  # type: ignore
-        info["f_id"] = self.current_subspace.f_id  # type: ignore
-        info["c_id"] = self.current_subspace.f_id  # type: ignore
+        info["score"] = self.current_subspace.score  # type: ignore
 
         return info
 
@@ -220,15 +218,16 @@ class DBA(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         if stop():
             return [], {"algorithm": "EndExplor"}  # Exploration ending
         else:
-            points, info = exploration.forward(X, Y, secondary, constraint)
+            points, info_dict = exploration.forward(X, Y, secondary, constraint, info)
             if len(points) > 0:
-                info = self._add_info(info)
+                info_dict = self._add_info(info_dict)
                 self.current_calls += len(points)  # Add new computed points to counter
-                return points, info  # Continue exploration
+                return points, info_dict  # Continue exploration
             else:
                 return [], {"algorithm": "EndExplor"}  # Exploration ending
 
@@ -240,15 +239,16 @@ class DBA(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         if stop():
             return [], {"algorithm": "EndExploi"}  # Exploitation ending
         else:
-            points, info = exploitation.forward(X, Y, secondary, constraint)
+            points, info_dict = exploitation.forward(X, Y, secondary, constraint, info)
             if len(points) > 0:
-                info = self._add_info(info)  # add DBA information
+                info_dict = self._add_info(info_dict)  # add DBA information
                 self.current_calls += len(points)  # Add new computed points to counter
-                return points, info
+                return points, info_dict
             else:
                 return [], {"algorithm": "EndExploi"}  # Exploitation ending
 
@@ -562,9 +562,7 @@ class DBADirect(Metaheuristic):
     # Add more info to ouputs
     def _add_info(self, info: dict) -> dict:
         info["level"] = self.current_subspace.level  # type: ignore
-        info["father"] = self.current_subspace.father  # type: ignore
-        info["f_id"] = self.current_subspace.f_id  # type: ignore
-        info["c_id"] = self.current_subspace.f_id  # type: ignore
+        info["score"] = self.current_subspace.score  # type: ignore
 
         return info
 
