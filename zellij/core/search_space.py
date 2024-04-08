@@ -557,12 +557,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
     ----------
     level : int
         Current level of the fractal in the partition tree. See Tree_search.
-    father : int
-        Fractal id of the parent of the fractal.
-    f_id : int
-        ID of the fractal at the current level.
-    c_id : int
-        ID of the child among the children of the parent.
     score : float
         Score of the fractal. By default the score of the fractal is equal
         to the score of its parent (inheritance), so it can be locally
@@ -585,6 +579,8 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         self,
         variables: IterableVar,
         measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -594,6 +590,10 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
             Determines the bounds of the search space.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
         super(BaseFractal, self).__init__(variables)
         self._compute_measure = measurement
@@ -604,11 +604,8 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
 
         self.measure = float("nan")
 
-        self.level = 0
-        self.father = -1  # father id, -1 = no father
-        self.f_id = 0  # fractal id at a given level
-        self.c_id = 0  # Children id
-        self.score = float("inf")
+        self.level = level
+        self.score = score
 
         self.solutions = []
         self.losses = np.array([], dtype=float)
@@ -653,16 +650,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
             else:
                 self.constraint_val = secondary
 
-    def get_id(self):
-        return (self.level, self.father, self.c_id)
-
-    def _compute_f_id(self, k: int) -> Tuple[int, int]:
-        """_compute_f_id
-        Compute range of IDs according to partition size k
-        """
-        base = self.f_id * k
-        return base, base + k
-
     @abstractmethod
     def create_children(self) -> Sequence[BaseFractal]:
         pass
@@ -670,9 +657,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
     def _modify(
         self,
         level: int,
-        father: int,
-        f_id: int,
-        c_id: int,
         score: float,
         measure: float,
     ):
@@ -683,9 +667,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
 
         """
         self.level = level
-        self.father = father
-        self.f_id = f_id
-        self.c_id = c_id
         self.score = score
         self.measure = measure
         self.solutions = []
@@ -694,9 +675,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
     def _essential_info(self) -> dict:
         return {
             "level": self.level,
-            "father": self.father,
-            "f_id": self.f_id,
-            "c_id": self.c_id,
             "score": self.score,
             "measure": self.measure,
         }
@@ -705,7 +683,7 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         """_essential_info
         Essential information to create the fractal. Used in _modify
         """
-        return f"{type(self).__name__}({self.level},{self.father},{self.c_id})"
+        return f"{type(self).__name__}({self.level},{self.score})"
 
     def __lt__(self, other):
         return self.score < other.score
@@ -744,12 +722,6 @@ class Fractal(BaseFractal, UnitSearchspace):
     ----------
     level : int
         Current level of the fractal in the partition tree. See Tree_search.
-    father : int
-        Fractal id of the parent of the fractal.
-    f_id : int
-        ID of the fractal at the current level.
-    c_id : int
-        ID of the child among the children of the parent.
     score : float
         Score of the fractal. By default the score of the fractal is equal
         to the score of its parent (inheritance), so it can be locally
@@ -765,6 +737,7 @@ class Fractal(BaseFractal, UnitSearchspace):
     measure : float, default=NaN
         Measure of the fractal, obtained by a :code:`Measurement`.
 
+
     See Also
     --------
     :ref:`lf` : Defines what a loss function is
@@ -779,6 +752,8 @@ class Fractal(BaseFractal, UnitSearchspace):
         variables: ArrayVar,
         measurement: Optional[Measurement] = None,
         distance: Optional[Distance] = None,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -791,10 +766,16 @@ class Fractal(BaseFractal, UnitSearchspace):
             By default :code:`Euclidean()`.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
 
         """
         self._do_convert = False
-        super(Fractal, self).__init__(variables=variables, measurement=measurement)
+        super(Fractal, self).__init__(
+            variables=variables, measurement=measurement, level=level, score=score
+        )
         self.distance = distance
 
     def create_children(self: FR, k: int, *args, **kwargs) -> Sequence[FR]:
@@ -811,23 +792,18 @@ class Fractal(BaseFractal, UnitSearchspace):
             Partition size
         """
 
+        next_level = self.level + 1
         children = [
             type(self)(
                 variables=self.variables,  # type: ignore
                 measurement=self._compute_measure,
+                level=next_level,
+                score=self.score,
                 *args,
                 **kwargs,
             )
             for _ in range(k)
         ]
-        low_id, up_id = self._compute_f_id(k)
-        for c_id, f_id in enumerate(range(low_id, up_id)):
-            children[c_id].level = self.level + 1
-            children[c_id].father = self.f_id
-            children[c_id].c_id = c_id
-            children[c_id].f_id = f_id
-            children[c_id].score = self.score
-            children[c_id]._update_measure()
 
         return children
 
@@ -882,7 +858,11 @@ class MixedFractal(BaseFractal, MixedSearchspace):
     """
 
     def __init__(
-        self, variables: IterableVar, measurement: Optional[Measurement] = None
+        self,
+        variables: IterableVar,
+        measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -895,10 +875,15 @@ class MixedFractal(BaseFractal, MixedSearchspace):
             By default :code:`Euclidean()`.
         measurement : Measurement, optional
             Defines the measure of a fractal.
-
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
         self._do_convert = False
-        super(MixedFractal, self).__init__(variables=variables, measurement=measurement)
+        super(MixedFractal, self).__init__(
+            variables=variables, measurement=measurement, level=level, score=score
+        )
 
     def create_children(self: MFR, k: int, *args, **kwargs) -> Sequence[MFR]:
         """create_children(self)
@@ -914,23 +899,17 @@ class MixedFractal(BaseFractal, MixedSearchspace):
             Partition size
         """
 
+        next_level = self.level + 1
         children = [
             type(self)(
                 variables=self.variables,
                 measurement=self._compute_measure,
+                level=next_level,
+                score=self.score,
                 *args,
                 **kwargs,
             )
             for _ in range(k)
         ]
-
-        low_id, up_id = self._compute_f_id(k)
-        for c_id, f_id in enumerate(range(low_id, up_id)):
-            children[c_id].level = self.level + 1
-            children[c_id].father = self.f_id
-            children[c_id].c_id = c_id
-            children[c_id].f_id = f_id
-            children[c_id].score = self.score
-            children[c_id]._update_measure()
 
         return children

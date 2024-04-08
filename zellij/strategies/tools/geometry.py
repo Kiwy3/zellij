@@ -67,6 +67,8 @@ class Hypercube(Fractal):
         self,
         variables: ArrayVar,
         measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -78,8 +80,14 @@ class Hypercube(Fractal):
             of `FloatVar` and all must have converter.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
-        super(Hypercube, self).__init__(variables, measurement)
+        super(Hypercube, self).__init__(
+            variables, measurement=measurement, level=level, score=score
+        )
 
     def create_children(self):
         """create_children(self)
@@ -101,8 +109,8 @@ class Hypercube(Fractal):
 
         return children
 
-    def _modify(self, upper, lower, level, father, f_id, c_id, score, measure):
-        super()._modify(level, father, f_id, c_id, score, measure)
+    def _modify(self, upper, lower, level, score, measure):
+        super()._modify(level, score, measure)
         self.upper, self.lower = upper, lower
 
     def _essential_info(self):
@@ -151,7 +159,13 @@ class Hypersphere(Fractal):
 
     """
 
-    def __init__(self, variables, measurement: Optional[Measurement] = None):
+    def __init__(
+        self,
+        variables,
+        measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
+    ):
         """__init__
 
         Parameters
@@ -162,14 +176,20 @@ class Hypersphere(Fractal):
             of `FloatVar` and all must have converter.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
 
         """
 
-        super(Hypersphere, self).__init__(variables, measurement)
+        super(Hypersphere, self).__init__(
+            variables, measurement, level=level, score=score
+        )
         self.center = np.full(self.size, 0.5)
         self.radius = 0.5
 
-    # Return a random point of the search space
+    # Return a random point from the search space
     def random_point(self, size: Optional[int] = None) -> Union[list, List[list]]:
         if size:
             points = np.random.normal(size=(size, self.size))
@@ -213,13 +233,10 @@ class Hypersphere(Fractal):
         center: np.ndarray,
         radius: float,
         level: int,
-        father: int,
-        f_id: int,
-        c_id: int,
         score: float,
         measure: float,
     ):
-        super()._modify(level, father, f_id, c_id, score, measure)
+        super()._modify(level, score, measure)
         self.center, self.radius = center, radius
 
     def _essential_info(self):
@@ -229,7 +246,6 @@ class Hypersphere(Fractal):
 
 
 class Section(Fractal):
-
     """Section
 
     Performs a n-Section of the search space.
@@ -285,6 +301,8 @@ class Section(Fractal):
         variables: ArrayVar,
         measurement: Optional[Measurement] = None,
         section: int = 2,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -298,10 +316,13 @@ class Section(Fractal):
             Defines the measure of a fractal.
         section : int, default=2
             Defines in how many equal sections the space should be decompose.
-
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
 
-        super(Section, self).__init__(variables, measurement)
+        super(Section, self).__init__(variables, measurement, level=level, score=score)
         self.lower = np.zeros(self.size)
         self.upper = np.ones(self.size)
         self.section = section
@@ -355,10 +376,8 @@ class Section(Fractal):
 
         return children
 
-    def _modify(
-        self, upper, lower, level, is_middle, father, f_id, c_id, score, measure
-    ):
-        super()._modify(level, father, f_id, c_id, score, measure)
+    def _modify(self, upper, lower, level, is_middle, score, measure):
+        super()._modify(level, score, measure)
         self.upper, self.lower = upper, lower
         self.is_middle = is_middle
 
@@ -371,7 +390,6 @@ class Section(Fractal):
 
 
 class Direct(Fractal):
-
     """Direct
 
     DIRECT geometry. Direct cannot be used with :code:`DBA` and :code:`ABDA`.
@@ -397,7 +415,13 @@ class Direct(Fractal):
     Hypercube : Another hypervolume, with different properties
     """
 
-    def __init__(self, variables: ArrayVar, measurement: Optional[Measurement] = None):
+    def __init__(
+        self,
+        variables: ArrayVar,
+        measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
+    ):
         """__init__
 
         Parameters
@@ -408,10 +432,13 @@ class Direct(Fractal):
             of `FloatVar` and all must have converter.
         measurement : Measurement, optional
             Defines the measure of a fractal.
-
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
 
-        super(Direct, self).__init__(variables, measurement)
+        super(Direct, self).__init__(variables, measurement, level=level, score=score)
         self.width = 1.0
         self.set_i = list(range(0, self.size))
 
@@ -501,13 +528,10 @@ class Direct(Fractal):
         width: float,
         set_i: list,
         level: int,
-        father: int,
-        f_id: int,
-        c_id: int,
         score: float,
         measure: float,
     ):
-        super()._modify(level, father, f_id, c_id, score, measure)
+        super()._modify(level, score, measure)
         self.upper, self.lower = upper, lower
         self.width = width
         self.set_i = set_i
@@ -547,6 +571,8 @@ class LatinHypercube(Hypercube):
         ndist: int = 1,
         grid_size: int = 2,
         orthogonal: bool = False,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -571,9 +597,15 @@ class LatinHypercube(Hypercube):
             Apply a symmetrization on the LatinHypercube distribution.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
 
-        super(LatinHypercube, self).__init__(variables, measurement)
+        super(LatinHypercube, self).__init__(
+            variables, measurement, level=level, score=score
+        )
 
         self.grid_size = grid_size
         self.ndist = ndist
@@ -662,13 +694,10 @@ class LatinHypercube(Hypercube):
         upper: np.ndarray,
         lower: np.ndarray,
         level: int,
-        father: int,
-        f_id: int,
-        c_id: int,
         score: float,
         measure: float,
     ):
-        Fractal._modify(self, level, father, f_id, c_id, score, measure)
+        Fractal._modify(self, level, score, measure)
         self.upper, self.lower = upper, lower
 
     def _essential_info(self):
@@ -678,7 +707,6 @@ class LatinHypercube(Hypercube):
 
 
 class PermFractal(MixedFractal):
-
     """PermFractal
 
     Concrete Fractal for permutations
@@ -721,6 +749,8 @@ class PermFractal(MixedFractal):
         self,
         variables: PermutationVar,
         measurement: Optional[Measurement] = None,
+        level: int = 0,
+        score: float = float("inf"),
     ):
         """__init__
 
@@ -730,9 +760,13 @@ class PermFractal(MixedFractal):
             Determines the bounds of the search space.
         measurement : Measurement, optional
             Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
         """
 
-        super().__init__(variables, measurement)
+        super().__init__(variables, measurement, level=level, score=score)
         self.base = np.arange(self.variables.n, dtype=int)
         self.fixed_idx = 1
 
@@ -783,8 +817,8 @@ class PermFractal(MixedFractal):
         else:
             return np.random.permutation(self.base[self.fixed_idx :]).tolist()
 
-    def _modify(self, fixed_v, level, father, f_id, c_id, score, measure):
-        super()._modify(level, father, f_id, c_id, score, measure)
+    def _modify(self, fixed_v, level, score, measure):
+        super()._modify(level, score, measure)
         self.base = np.arange(self.variables.n)
         self.base[: len(fixed_v)] = self.base[fixed_v]
         self.base[fixed_v] = np.arange(len(fixed_v))

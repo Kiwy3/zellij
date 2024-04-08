@@ -344,14 +344,14 @@ class DBA(Metaheuristic):
             # continue, points, info
             if self.initialized_explor:
                 self.exploration.search_space.add_solutions(X, Y)  # type: ignore
-                points, info = self._explor(stop, self.exploration, X, Y)
+                points, info_dict = self._explor(stop, self.exploration, X, Y)
             else:
                 self.initialized_explor = True
                 self.exploration.search_space = self.current_subspace
-                points, info = self._explor(stop, self.exploration, None, None)
+                points, info_dict = self._explor(stop, self.exploration, None, None)
 
             if len(points) > 0:
-                return points, info
+                return points, info_dict
             else:
                 self.n_h += 1
                 self.current_calls = 0
@@ -371,14 +371,14 @@ class DBA(Metaheuristic):
             stop = self.stop_exploi
             # continue, points, info
             if self.initialized_exploi:
-                points, info = self._exploi(stop, self.exploitation, X, Y)  # type: ignore
+                points, info_dict = self._exploi(stop, self.exploitation, X, Y)  # type: ignore
             else:
                 self.exploitation.search_space = self.current_subspace  # type: ignore
-                points, info = self._exploi(stop, self.exploitation, None, None)  # type: ignore
+                points, info_dict = self._exploi(stop, self.exploitation, None, None)  # type: ignore
                 self.initialized_exploi = True
 
             if len(points) > 0:
-                return points, info
+                return points, info_dict
             else:
                 self.n_h += 1
                 self.current_calls = 0
@@ -576,15 +576,16 @@ class DBADirect(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         if stop():
             return [], {"algorithm": "EndExplor"}  # Exploration ending
         else:
-            points, info = exploration.forward(X, Y, secondary, constraint)
+            points, info_dict = exploration.forward(X, Y, secondary, constraint, info)
             if len(points) > 0:
-                info = self._add_info(info)
+                info_dict = self._add_info(info_dict)
                 self.current_calls += len(points)  # Add new computed points to counter
-                return points, info  # Continue exploration
+                return points, info_dict  # Continue exploration
             else:
                 return [], {"algorithm": "EndExplor"}  # Exploration ending
 
@@ -596,15 +597,16 @@ class DBADirect(Metaheuristic):
         Y: Optional[np.ndarray],
         secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
     ):
         if stop():
             return [], {"algorithm": "EndExploi"}  # Exploitation ending
         else:
-            points, info = exploitation.forward(X, Y, secondary, constraint)
+            points, info_dict = exploitation.forward(X, Y, secondary, constraint, info)
             if len(points) > 0:
-                info = self._add_info(info)  # add DBA information
+                info_dict = self._add_info(info_dict)  # add DBA information
                 self.current_calls += len(points)  # Add new computed points to counter
-                return points, info
+                return points, info_dict
             else:
                 return [], {"algorithm": "EndExploi"}  # Exploitation ending
 
@@ -696,14 +698,14 @@ class DBADirect(Metaheuristic):
             # continue, points, info
             if self.initialized_explor:
                 self.exploration.search_space.add_solutions(X, Y)  # type: ignore
-                points, info = self._explor(stop, self.exploration, X, Y)
+                points, info_dict = self._explor(stop, self.exploration, X, Y)
             else:
                 self.initialized_explor = True
                 self.exploration.search_space = self.current_subspace
-                points, info = self._explor(stop, self.exploration, None, None)
+                points, info_dict = self._explor(stop, self.exploration, None, None)
 
             if len(points) > 0:
-                return points, info
+                return points, info_dict
             else:
                 self.n_h += 1
                 self.current_calls = 0
@@ -728,14 +730,14 @@ class DBADirect(Metaheuristic):
             stop = self.stop_exploi
             # continue, points, info
             if self.initialized_exploi:
-                points, info = self._exploi(stop, self.exploitation, X, Y)  # type: ignore
+                points, info_dict = self._exploi(stop, self.exploitation, X, Y)  # type: ignore
             else:
                 self.exploitation.search_space = self.current_subspace  # type: ignore
-                points, info = self._exploi(stop, self.exploitation, None, None)  # type: ignore
+                points, info_dict = self._exploi(stop, self.exploitation, None, None)  # type: ignore
                 self.initialized_exploi = True
 
             if len(points) > 0:
-                return points, info
+                return points, info_dict
             else:
                 self.n_h += 1
                 self.current_calls = 0
