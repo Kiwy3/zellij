@@ -751,7 +751,7 @@ class Block(Variable):
             method, repeated `repeat` times. If size > 1, return a list of list.
 
         """
-
+        res = []
         if size > 1:
             for _ in range(size):
                 block = []
