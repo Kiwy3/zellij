@@ -719,6 +719,7 @@ class Block(Variable):
     """
 
     def __init__(self, label, value, repeat, **kwargs):
+        self.value = value
         super(Block, self).__init__(label, **kwargs)
 
         assert isinstance(
@@ -726,8 +727,6 @@ class Block(Variable):
         ), f"""
         Value must inherit from :ref:`var`, got {args}
         """
-
-        self.value = value
 
         assert (
             isinstance(repeat, int) and repeat > 0
@@ -753,17 +752,21 @@ class Block(Variable):
 
         """
 
-        res = []
-
         if size > 1:
             for _ in range(size):
                 block = []
                 for _ in range(self.repeat):
-                    block.append([v.random() for v in self.value])
+                    if isinstance(self.value, list) and (len(self.value) > 0):
+                        block.append([v.random() for v in self.value])
+                    else:
+                        block.append(self.value.random())
                 res.append(block)
         else:
             for _ in range(self.repeat):
-                res.append([v.random() for v in self.value])
+                if isinstance(self.value, list) and (len(self.value) > 0):
+                    res.append([v.random() for v in self.value])
+                else:
+                    res.append(self.value.random())
 
         return res
 
