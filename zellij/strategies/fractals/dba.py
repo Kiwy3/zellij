@@ -184,7 +184,8 @@ class DBA(Metaheuristic):
     def stop_exploi(self, value: Optional[Stopping]):
         if value:
             self._stop_exploi = value
-            self._stop_exploi.target = self
+            if not self._stop_exploi.target:
+                self._stop_exploi.target = self
         else:  # if only 1 Stopping
             self._stop_exploi = None
 
