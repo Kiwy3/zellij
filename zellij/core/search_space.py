@@ -581,7 +581,7 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
-        save_points: bool = True,
+        save_points: bool = False,
     ):
         """__init__
 
@@ -759,6 +759,7 @@ class Fractal(BaseFractal, UnitSearchspace):
         distance: Optional[Distance] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points: bool = False,
     ):
         """__init__
 
@@ -779,7 +780,11 @@ class Fractal(BaseFractal, UnitSearchspace):
         """
         self._do_convert = False
         super(Fractal, self).__init__(
-            variables=variables, measurement=measurement, level=level, score=score
+            variables=variables,
+            measurement=measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
         )
         self.distance = distance
 
@@ -868,6 +873,7 @@ class MixedFractal(BaseFractal, MixedSearchspace):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points: bool = False,
     ):
         """__init__
 
@@ -887,7 +893,11 @@ class MixedFractal(BaseFractal, MixedSearchspace):
         """
         self._do_convert = False
         super(MixedFractal, self).__init__(
-            variables=variables, measurement=measurement, level=level, score=score
+            variables=variables,
+            measurement=measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
         )
 
     def create_children(self: MFR, k: int, *args, **kwargs) -> Sequence[MFR]:

@@ -72,6 +72,7 @@ class Hypercube(Fractal):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -89,7 +90,11 @@ class Hypercube(Fractal):
             Set the default score of a fractal.
         """
         super(Hypercube, self).__init__(
-            variables, measurement=measurement, level=level, score=score
+            variables,
+            measurement=measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
         )
 
     def create_children(self):
@@ -168,6 +173,7 @@ class Hypersphere(Fractal):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -187,7 +193,7 @@ class Hypersphere(Fractal):
         """
 
         super(Hypersphere, self).__init__(
-            variables, measurement, level=level, score=score
+            variables, measurement, level=level, score=score, save_points=save_points
         )
         self.center = np.full(self.size, 0.5)
         self.radius = 0.5
@@ -306,6 +312,7 @@ class Section(Fractal):
         section: int = 2,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -325,7 +332,9 @@ class Section(Fractal):
             Set the default score of a fractal.
         """
 
-        super(Section, self).__init__(variables, measurement, level=level, score=score)
+        super(Section, self).__init__(
+            variables, measurement, level=level, score=score, save_points=save_points
+        )
         self.lower = np.zeros(self.size)
         self.upper = np.ones(self.size)
         self.section = section
@@ -397,6 +406,7 @@ class NMSOSection(Fractal):
         section: int = 2,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -417,7 +427,7 @@ class NMSOSection(Fractal):
         """
 
         super(NMSOSection, self).__init__(
-            variables, measurement, level=level, score=score
+            variables, measurement, level=level, score=score, save_points=save_points
         )
         self.lower = np.zeros(self.size)
         self.upper = np.ones(self.size)
@@ -573,7 +583,9 @@ class Direct(Fractal):
             Set the default score of a fractal.
         """
 
-        super(Direct, self).__init__(variables, measurement, level=level, score=score)
+        super(Direct, self).__init__(
+            variables, measurement, level=level, score=score, save_points=True
+        )
         self.width = 1.0
         self.set_i = list(range(0, self.size))
 
@@ -708,6 +720,7 @@ class LatinHypercube(Hypercube):
         orthogonal: bool = False,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -739,7 +752,7 @@ class LatinHypercube(Hypercube):
         """
 
         super(LatinHypercube, self).__init__(
-            variables, measurement, level=level, score=score
+            variables, measurement, level=level, score=score, save_points=save_points
         )
 
         self.grid_size = grid_size
@@ -886,6 +899,7 @@ class PermFractal(MixedFractal):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points=False,
     ):
         """__init__
 
@@ -901,7 +915,9 @@ class PermFractal(MixedFractal):
             Set the default score of a fractal.
         """
 
-        super().__init__(variables, measurement, level=level, score=score)
+        super().__init__(
+            variables, measurement, level=level, score=score, save_points=save_points
+        )
         self.base = np.arange(self.variables.n, dtype=int)
         self.fixed_idx = 1
 
