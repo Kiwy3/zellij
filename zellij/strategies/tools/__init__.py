@@ -22,6 +22,7 @@ from .geometry import (
     Direct,
     LatinHypercube,
     PermFractal,
+    NMSOSection,
 )
 
 from .tree_search import (
@@ -36,6 +37,7 @@ from .tree_search import (
     SooTreeSearch,
     MoveUp,
     CyclicBestFirstSearch,
+    NMSOTreeSearch,
 )
 
 

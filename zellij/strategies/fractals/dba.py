@@ -268,20 +268,22 @@ class DBA(Metaheuristic):
         return len(subspaces) > 0
 
     def _next_subspace(self) -> Optional[BaseFractal]:
-        if len(self.subspaces_queue) < 1:  # if no more subspace in queue
+        if len(self.subspaces_queue) == 0:  # if no more subspace in queue
             # if there is leaves, create children and add to queue
             if self._next_tree():
                 return self._next_subspace()
             else:  # else end algorithm
                 return None
-        elif (
-            self.current_subspace
-            and self.current_subspace.level < self.tree_search.max_depth
+
+        new_subspace = self.subspaces_queue.pop()
+        if (
+            new_subspace
+            and new_subspace.level < self.tree_search.max_depth
+            and new_subspace.level != 0
         ):
             # add subspace to OPEN list
-            self.tree_search.add(self.current_subspace)
-
-        return self.subspaces_queue.pop()
+            self.tree_search.add(new_subspace)
+        return new_subspace
 
     def _switch(self, subspace: BaseFractal) -> bool:
         # If not max level do exploration else exploitation

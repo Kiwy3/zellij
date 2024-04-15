@@ -9,6 +9,9 @@ from zellij.core.search_space import Fractal, MixedFractal
 
 from typing import Optional, Callable, Union, List, TYPE_CHECKING
 
+from zellij.core.variables import ArrayVar
+from zellij.strategies.tools.measurements import Measurement
+
 if TYPE_CHECKING:
     from zellij.core.variables import ArrayVar, PermutationVar
     from zellij.strategies.tools.measurements import Measurement
@@ -350,9 +353,8 @@ class Section(Fractal):
 
         children = super().create_children(self.section)
 
-        up_m_lo = self.upper - self.lower
-        longest = np.argmax(up_m_lo)
-        width = up_m_lo[longest]
+        longest = self.level % self.size
+        width = self.upper[longest] - self.lower[longest]
 
         step = width / self.section
 
@@ -363,15 +365,12 @@ class Section(Fractal):
         uppers[:, longest] = lowers[:, longest] + add[1:]
         lowers[:, longest] = lowers[:, longest] + add[:-1]
 
-        are_middle = [False] * self.section
-        if self.section % 2 != 0:
-            are_middle[int(self.section / 2)] = True
-
-        for l, u, child, mid in zip(lowers, uppers, children, are_middle):
+        for idx, (l, u, child) in enumerate(zip(lowers, uppers, children)):
             child.lower = l
             child.upper = u
             child.section = self.section
-            child.is_middle = mid
+            if self.section % 2 != 0 and int(self.section / 2) == idx:
+                child.is_middle = True
             child._update_measure()
 
         return children
@@ -385,6 +384,142 @@ class Section(Fractal):
         infos = super()._essential_info()
         infos.update(
             {"upper": self.upper, "lower": self.lower, "is_middle": self.is_middle}
+        )
+        return infos
+
+
+class NMSOSection(Fractal):
+
+    def __init__(
+        self,
+        variables: ArrayVar,
+        measurement: Optional[Measurement] = None,
+        section: int = 2,
+        level: int = 0,
+        score: float = float("inf"),
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        variables : ArrayVar
+            Determines the bounds of the search space.
+            For `ContinuousSearchspace` the `variables` must be an `ArrayVar`
+            of `FloatVar` and all must have converter.
+        measurement : Measurement, optional
+            Defines the measure of a fractal.
+        section : int, default=2
+            Defines in how many equal sections the space should be decompose.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
+        """
+
+        super(NMSOSection, self).__init__(
+            variables, measurement, level=level, score=score
+        )
+        self.lower = np.zeros(self.size)
+        self.upper = np.ones(self.size)
+        self.section = section
+
+        self.left = False
+        self.middle = False
+        self.right = False
+        self.is_middle = False
+        self.df = -float("inf")
+        self.dx = 0
+        self.visited = float("inf")
+
+    @property
+    def section(self) -> int:
+        return self._section
+
+    @section.setter
+    def section(self, value: int):
+        if value <= 1:
+            raise InitializationError(
+                f"{value}-Section is not possible, section must be > 1"
+            )
+        else:
+            self._section = value
+
+    def create_children(self):
+        """create_children()
+
+        Partition function.
+        """
+
+        children = super().create_children(self.section)
+
+        longest = self.level % self.size
+        width = self.upper[longest] - self.lower[longest]
+
+        step = width / self.section
+
+        lowers = np.tile(self.lower, (self.section, 1))
+        uppers = np.tile(self.upper, (self.section, 1))
+
+        add = np.arange(0, self.section + 1) * step
+        uppers[:, longest] = lowers[:, longest] + add[1:]
+        lowers[:, longest] = lowers[:, longest] + add[:-1]
+
+        middle = int(np.floor(self.section / 2))
+        left = max(0, middle - 1)
+        right = middle + 1
+
+        for idx, (l, u, child) in enumerate(zip(lowers, uppers, children)):
+            child.lower = l
+            child.upper = u
+            child.section = self.section
+            if self.section % 2 != 0 and middle == idx:
+                child.is_middle = True
+            child.dx = step
+            child.df = self.df
+            child._update_measure()
+
+        children[middle].middle = True
+        children[left].left = True
+        children[right].right = True
+
+        return children
+
+    def _modify(
+        self,
+        upper,
+        lower,
+        level,
+        left,
+        middle,
+        is_middle,
+        right,
+        df,
+        dx,
+        score,
+        measure,
+    ):
+        super()._modify(level, score, measure)
+        self.upper, self.lower = upper, lower
+        self.left = left
+        self.middle = middle
+        self.is_middle = is_middle
+        self.right = right
+        self.df = df
+        self.dx = dx
+
+    def _essential_info(self):
+        infos = super()._essential_info()
+        infos.update(
+            {
+                "upper": self.upper,
+                "lower": self.lower,
+                "left": self.left,
+                "middle": self.middle,
+                "is_middle": self.is_middle,
+                "right": self.right,
+                "df": self.df,
+                "d": self.dx,
+            }
         )
         return infos
 

@@ -7,7 +7,14 @@ from __future__ import annotations
 from zellij.core.errors import InitializationError
 from zellij.strategies.tools.chaos_map import ChaosMap
 from zellij.core.metaheuristic import ContinuousMetaheuristic, Metaheuristic
-from zellij.strategies.tools import Hypersphere, Section, Hypercube, Direct, PermFractal
+from zellij.strategies.tools import (
+    Hypersphere,
+    Section,
+    NMSOSection,
+    Hypercube,
+    Direct,
+    PermFractal,
+)
 
 from typing import List, Tuple, Optional, Union
 
@@ -212,7 +219,7 @@ class CenterSOO(ContinuousMetaheuristic):
 
     @search_space.setter
     def search_space(self, value: Section):
-        if value and isinstance(value, Section):
+        if value and isinstance(value, (Section, NMSOSection)):
             self._search_space = value
             self.center = (value.upper + value.lower) / 2
             self.computed = False

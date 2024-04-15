@@ -5,15 +5,17 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Union, Iterable
+from typing import List, Dict, Tuple, Union, Iterable, TYPE_CHECKING
+from collections import defaultdict
 
 from zellij.core.search_space import BaseFractal
 from zellij.core.errors import InitializationError
+from zellij.strategies.tools.geometry import NMSOSection
 
 import numpy as np
 from itertools import groupby
-
 import logging
+from bisect import insort_left
 
 logger = logging.getLogger("zellij.tree_search")
 
@@ -51,7 +53,7 @@ class TreeSearch(ABC):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
     ):
         """__init__
 
@@ -190,7 +192,7 @@ class BreadthFirstSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
     ):
         """__init__
@@ -216,27 +218,14 @@ class BreadthFirstSearch(TreeSearch):
 
         self.Q = Q
 
-        #############
-        # VARIABLES #
-        #############
-
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(key=lambda x: (x.level, x.score), reverse=False)
-
         sel_nodes = []
         if len(self.openl) > 0:
-            idx_min = min(len(self.openl), self.Q)
-            sel_nodes = self.openl[:idx_min]
-            self.openl = self.openl[idx_min:]
-
+            sel_nodes = self.openl[: self.Q]
+            self.openl = self.openl[self.Q :]
             self.add_close(sel_nodes)
 
         return sel_nodes
@@ -258,8 +247,6 @@ class DepthFirstSearch(TreeSearch):
         If True save expanded, explored and scored fractal within a :code:`close` list.
     Q : int, default=1
         Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort.
 
     Methods
     -------
@@ -303,7 +290,7 @@ class DepthFirstSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
     ):
         """__init__
@@ -328,26 +315,14 @@ class DepthFirstSearch(TreeSearch):
 
         self.Q = Q
 
-        #############
-        # VARIABLES #
-        #############
-
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (-x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.openl.sort(key=lambda x: (x.level, -x.score), reverse=True)
-            self.next_frontier = []
-
         sel_nodes = []
         if len(self.openl) > 0:
-            idx_min = min(len(self.openl), self.Q)
-            sel_nodes = self.openl[:idx_min]
-            self.openl = self.openl[idx_min:]
+            sel_nodes = self.openl[: self.Q]
+            self.openl = self.openl[self.Q :]
             self.add_close(sel_nodes)
 
         return sel_nodes
@@ -367,8 +342,6 @@ class BestFirstSearch(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-BestFirstSearch, at each :code:`get_next`, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort
 
     Methods
     -------
@@ -413,9 +386,8 @@ class BestFirstSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
     ):
         """__init__
 
@@ -429,8 +401,6 @@ class BestFirstSearch(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-BestFirstSearch, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
 
         """
         super().__init__(openl, max_depth, save_close)
@@ -438,30 +408,16 @@ class BestFirstSearch(TreeSearch):
         ##############
         # PARAMETERS #
         ##############
-
-        self.reverse = reverse
         self.Q = Q
 
-        #############
-        # VARIABLES #
-        #############
-
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: x.score)
 
     def get_next(self):
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(key=lambda x: x.score, reverse=self.reverse)
-
         sel_nodes = []
         if len(self.openl) > 0:
-            idx_min = min(len(self.openl), self.Q)
-            sel_nodes = self.openl[:idx_min]
-            self.openl = self.openl[idx_min:]
+            sel_nodes = self.openl[: self.Q]
+            self.openl = self.openl[self.Q :]
             self.add_close(sel_nodes)
 
         return sel_nodes
@@ -481,8 +437,6 @@ class BeamSearch(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-BeamSearch, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort
 
     Methods
     -------
@@ -529,9 +483,8 @@ class BeamSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
         beam_length: int = 10,
     ):
         """__init__
@@ -546,8 +499,6 @@ class BeamSearch(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-BeamSearch, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
         beam_length : int, default=10
             Determines the length of the open list for memory and prunning issues.
 
@@ -558,30 +509,19 @@ class BeamSearch(TreeSearch):
         ##############
         # PARAMETERS #
         ##############
-        self.reverse = reverse
         self.Q = Q
         self.beam_length = beam_length
 
-        #############
-        # VARIABLES #
-        #############
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: x.score)
+        if len(self.openl) > self.beam_length:
+            self.openl.pop()
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(key=lambda x: x.score, reverse=self.reverse)
-            self.next_frontier = []
-
         sel_nodes = []
         if len(self.openl) > 0:
-            idx_min = min(len(self.openl), self.Q)
-            sel_nodes = self.openl[:idx_min]
-            self.openl = self.openl[idx_min:][: self.beam_length]
+            sel_nodes = self.openl[: self.Q]
+            self.openl = self.openl[self.Q :]
             self.add_close(sel_nodes)
 
         return sel_nodes
@@ -602,8 +542,6 @@ class EpsilonGreedySearch(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-Epsilon_greedy_search, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort.
     epsilon : float, default=0.1
         Probability to select a random node from the open list.
         Determine how random the selection must be.
@@ -651,9 +589,8 @@ class EpsilonGreedySearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
         epsilon: float = 0.1,
     ):
         """__init__
@@ -668,8 +605,6 @@ class EpsilonGreedySearch(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-Epsilon_greedy_search, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
         epsilon : float, default=0.1
             Probability to select a random node from the open list. Determine how random the selection must be. The higher it is, the more exploration EGS does.
 
@@ -682,24 +617,12 @@ class EpsilonGreedySearch(TreeSearch):
         ##############
 
         self.Q = Q
-        self.reverse = reverse
         self.epsilon = epsilon
 
-        #############
-        # VARIABLES #
-        #############
-
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: x.score)
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(key=lambda x: x.score, reverse=self.reverse)
-
         sel_nodes = []
         if len(self.openl) > 0:
             idx_min = min(len(self.openl), self.Q)
@@ -737,8 +660,6 @@ class CyclicBestFirstSearch(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-CyclicBestFirstSearch, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort
 
     Methods
     -------
@@ -783,9 +704,8 @@ class CyclicBestFirstSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
     ):
         """__init__
 
@@ -799,8 +719,6 @@ class CyclicBestFirstSearch(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
 
         """
         super().__init__(openl, max_depth, save_close)
@@ -808,7 +726,6 @@ class CyclicBestFirstSearch(TreeSearch):
         ##############
         # PARAMETERS #
         ##############
-        self.reverse = reverse
         self.Q = Q
 
         #############
@@ -851,7 +768,7 @@ class CyclicBestFirstSearch(TreeSearch):
 
             modified_levels = np.unique(modified_levels)
             for l in modified_levels:
-                self.contour[l].sort(key=lambda x: x.score, reverse=self.reverse)
+                self.contour[l].sort(key=lambda x: x.score)
 
             self.next_frontier = []
 
@@ -910,6 +827,12 @@ class PotentiallyOptimalRectangle(TreeSearch):
     error : float, default=1e-4
             Small value which determines when an evaluation should be considered
             as good as the best solution found so far.
+    error : float, default=1e-4
+            Small value which determines when an evaluation should be considered
+            as good as the best solution found so far.
+    maxopen : int, default=3000
+            Prunning parameter. Maximum number of fractals to store.
+
     Methods
     -------
     add(self,c)
@@ -930,9 +853,9 @@ class PotentiallyOptimalRectangle(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int = 600,
-        save_close: bool = True,
+        save_close: bool = False,
         error: float = 1e-4,
-        maxdiv: int = 3000,
+        maxopen: int = 3000,
     ):
         """__init__
 
@@ -947,7 +870,7 @@ class PotentiallyOptimalRectangle(TreeSearch):
         error : float, default=1e-4
             Small value which determines when an evaluation should be considered
             as good as the best solution found so far.
-        maxdiv : int, default=3000
+        maxopen : int, default=3000
             Prunning parameter. Maximum number of fractals to store.
         """
         super().__init__(openl, max_depth, save_close)
@@ -955,32 +878,23 @@ class PotentiallyOptimalRectangle(TreeSearch):
         # PARAMETERS #
         ##############
         self.error = error
-        self.maxdiv = maxdiv
+        self.maxopen = maxopen
 
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxdiv, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxdiv, float("inf"), dtype=float)
-
-        self.next_frontier = []
+        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
+        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
         self.best_score = float("inf")
 
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (x.measure, x.score))
         if c.score < self.best_score:
             self.best_score = c.score
+        if len(self.openl) > self.maxopen:
+            self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            # sort potentially optimal rectangle by length (increasing)
-            # then by score
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            # clip open list to maxdiv (oldest subspace are prunned)
-            self.openl = self.openl[-self.maxdiv :]
-            self.openl.sort(key=lambda x: (x.measure, x.score))
-
         sel_nodes = []
         self.maxi1.fill(-float("inf"))
         self.mini2.fill(float("inf"))
@@ -1091,8 +1005,11 @@ class LocallyBiasedPOR(TreeSearch):
     error : float, default=1e-4
             Small value which determines when an evaluation should be considered
             as good as the best solution found so far.
-    maxdiv : int, default=3000
-        Prunning parameter. Maximum number of fractals to store.
+    error : float, default=1e-4
+            Small value which determines when an evaluation should be considered
+            as good as the best solution found so far.
+    maxopen : int, default=3000
+            Prunning parameter. Maximum number of fractals to store.
 
     Methods
     -------
@@ -1114,9 +1031,9 @@ class LocallyBiasedPOR(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int = 600,
-        save_close: bool = True,
+        save_close: bool = False,
         error: float = 1e-4,
-        maxdiv: int = 3000,
+        maxopen: int = 3000,
     ):
         """__init__
 
@@ -1131,7 +1048,7 @@ class LocallyBiasedPOR(TreeSearch):
         error : float, default=1e-4
             Small value which determines when an evaluation should be considered
             as good as the best solution found so far.
-        maxdiv : int, default=3000
+        maxopen : int, default=3000
             Prunning parameter. Maximum number of fractals to store.
 
         """
@@ -1140,32 +1057,23 @@ class LocallyBiasedPOR(TreeSearch):
         # PARAMETERS #
         ##############
         self.error = error
-        self.maxdiv = maxdiv
+        self.maxopen = maxopen
 
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxdiv, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxdiv, float("inf"), dtype=float)
-
-        self.next_frontier = []
+        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
+        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
         self.best_score = float("inf")
 
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (x.measure, x.score))
         if c.score < self.best_score:
             self.best_score = c.score
+        if len(self.openl) > self.maxopen:
+            self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            # sort potentially optimal rectangle by length (increasing)
-            # then by score
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            # clip open list to maxdiv (oldest subspace are prunned)
-            self.openl = self.openl[-self.maxdiv :]
-            self.openl.sort(key=lambda x: (x.measure, x.score))
-
         sel_nodes = []
         self.maxi1.fill(-float("inf"))
         self.mini2.fill(float("inf"))
@@ -1275,8 +1183,7 @@ class LocallyBiasedPOR(TreeSearch):
 class AdaptivePOR(TreeSearch):
     """Adaptive_POR
 
-    Adaptive_POR, is a the selection strategy
-    comming from DIRECT-Restart.
+    Adaptive_POR, is a the selection strategy from DIRECT-Restart.
 
     Attributes
     ----------
@@ -1310,9 +1217,9 @@ class AdaptivePOR(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int = 600,
-        save_close: bool = True,
+        save_close: bool = False,
         error: float = 1e-2,
-        maxdiv: int = 3000,
+        maxopen: int = 3000,
         patience: int = 5,
     ):
         """__init__
@@ -1340,13 +1247,13 @@ class AdaptivePOR(TreeSearch):
         # PARAMETERS #
         ##############
         self.max_error = error
-        self.maxdiv = maxdiv
+        self.maxopen = maxopen
         self.patience = patience
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxdiv, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxdiv, float("inf"), dtype=float)
+        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
+        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
 
         self.next_frontier = []
         self.best_score = float("inf")
@@ -1356,18 +1263,13 @@ class AdaptivePOR(TreeSearch):
         self.error = self.max_error
 
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
-        if c.score < self.new_best_score:
-            self.new_best_score = c.score
+        insort_left(self.openl, c, key=lambda x: (-x.measure, x.score))
+        if c.score < self.best_score:
+            self.best_score = c.score
+        if len(self.openl) > self.maxopen:
+            self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            # clip open list to maxdiv (oldest subspace are prunned)
-            self.openl = self.openl[-self.maxdiv :]
-            self.openl.sort(key=lambda x: (-x.measure, x.score))
-
         if np.abs(self.best_score - self.new_best_score) < 1e-4:
             self.best_score = self.new_best_score
             self.new_best_score = float("inf")
@@ -1496,8 +1398,6 @@ class SooTreeSearch(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort
 
     Methods
     -------
@@ -1519,9 +1419,8 @@ class SooTreeSearch(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
     ):
         """__init__
 
@@ -1535,8 +1434,6 @@ class SooTreeSearch(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
 
         """
         super().__init__(openl, max_depth, save_close)
@@ -1544,24 +1441,12 @@ class SooTreeSearch(TreeSearch):
         ##############
         # PARAMETERS #
         ##############
-        self.reverse = reverse
         self.Q = Q
 
-        #############
-        # VARIABLES #
-        #############
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            # sort leaves according to level and score ascending
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(reverse=self.reverse, key=lambda x: (x.level, x.score))
-
         sel_nodes = []
         if len(self.openl) > 0:
             current_level = self.openl[0].level
@@ -1609,8 +1494,6 @@ class MoveUp(TreeSearch):
         Maximum depth of the partition tree.
     Q : int, default=1
         Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-    reverse : boolean, default=False
-        If False do a descending sort the open list, else do an ascending sort
 
     Methods
     -------
@@ -1632,9 +1515,8 @@ class MoveUp(TreeSearch):
         self,
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
-        save_close: bool = True,
+        save_close: bool = False,
         Q: int = 1,
-        reverse: bool = False,
     ):
         """__init__
 
@@ -1648,8 +1530,6 @@ class MoveUp(TreeSearch):
             If True save expanded, explored and scored fractal within a :code:`close` list.
         Q : int, default=1
             Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
-        reverse : boolean, default=False
-            If False do a descending sort the open list, else do an ascending sort
 
         """
         super().__init__(openl, max_depth, save_close)
@@ -1657,23 +1537,12 @@ class MoveUp(TreeSearch):
         ##############
         # PARAMETERS #
         ##############
-        self.reverse = reverse
         self.Q = Q
 
-        #############
-        # VARIABLES #
-        #############
-        self.next_frontier = []
-
     def add(self, c: BaseFractal):
-        self.next_frontier.append(c)
+        insort_left(self.openl, c, key=lambda x: (-x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
-        if len(self.next_frontier) > 0:
-            self.openl.extend(self.next_frontier)
-            self.next_frontier = []
-            self.openl.sort(reverse=self.reverse, key=lambda x: (-x.level, x.score))
-
         sel_nodes = []
         if len(self.openl) > 0:
             sel_nodes = self.openl[: self.Q]
@@ -1681,3 +1550,162 @@ class MoveUp(TreeSearch):
             self.add_close(sel_nodes)
 
         return sel_nodes
+
+
+########
+# NMSO #
+########
+
+
+class NMSOTreeSearch(TreeSearch):
+    """NMSOTreeSearch
+
+    Attributes
+    ----------
+    openl : list[BaseFractal]
+        Initial Open list containing not explored nodes from the partition tree.
+    max_depth : int
+        Maximum depth of the partition tree.
+
+    Methods
+    -------
+    add(self,c)
+        Add a node c to the fractal tree
+    get_next(self)
+        Get the next node to evaluate
+
+    See Also
+    --------
+    Fractal : Abstract class defining what a fractal is.
+    FDA : Fractal Decomposition Algorithm
+    TreeSearch : Base class
+    Breadth_first_search : Tree search Breadth based startegy
+    CyclicBestFirstSearch : Hybrid between DFS and BestFS
+    """
+
+    def __init__(
+        self,
+        openl: Union[NMSOSection, List[NMSOSection]],
+        max_depth: int,
+        V: int,
+        alpha: float,
+        beta: float,
+        save_close: bool = False,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        openl : {NMSOSection, list[NMSOSection]}
+            Initial Open list containing not explored nodes from the partition tree.
+        max_depth : int
+            Maximum depth of the partition tree.
+
+        V : int
+            How many evaluation before visiting the basket.
+        alpha : float, default=1e-8
+        beta : float, default=1e-8
+        save_close : boolean, default=True
+            If True save expanded, explored and scored fractal within a :code:`close` list.
+
+        """
+        self.size = -1
+        super().__init__(openl, max_depth, save_close)  # type: ignore
+
+        ##############
+        # PARAMETERS #
+        ##############
+        self.V = V
+        self.alpha = alpha
+        self.beta = beta
+
+        #############
+        # VARIABLES #
+        #############
+        self.current_depth = 0
+        self._new_child = []
+        self._newleft = None
+        self._newmiddle = None
+        self._newright = None
+
+    @property
+    def openl(self) -> defaultdict:
+        return self._openl
+
+    @openl.setter
+    def openl(self, value: Union[NMSOSection, List[NMSOSection]]):
+        self._openl = defaultdict(lambda: [])
+        if isinstance(value, list):
+            for node in value:
+                self._openl[node.level].append(node)
+            self.size = value[0].size
+        elif isinstance(value, NMSOSection):
+            self._openl[value.level].append(value)
+            self.size = value.size
+        else:
+            raise InitializationError(
+                "lopen list must be a BaseFractal or a list of BaseFractal."
+            )
+
+    def add(self, c: NMSOSection):
+        # ALL NEW FRACTALS ARE FROM THE SAME PARENT AS get_next RETURNS ONLY 1 FRACTAL
+        insort_left(self.openl[c.level], c, key=lambda x: x.score)
+        if c.left:
+            self._newleft = c
+        elif c.middle:
+            self._newmiddle = c
+        elif c.right:
+            self._newright = c
+        self._new_child.append(c)
+
+    def get_next(self) -> List[NMSOSection]:
+        if self.current_depth > self.max_depth:
+            self.current_depth = 1
+
+        if self._newmiddle and self._newright and self._newleft:
+            # COMPUTE DF (<= alpha)
+            new_df = np.abs(self._newright.score - self._newleft.score)
+            if (self._newright.level - 1) % self.size == 0:
+                df = new_df
+            else:
+                df = max(self._newright.df, new_df)
+
+            for child in self._new_child:
+                child.df = df
+
+            if (
+                (self._newmiddle.level % self.size == 0)
+                and (df <= self.alpha)
+                and (self._newmiddle.dx <= self.beta)
+            ):
+                self.current_depth = 1
+                for child in self._new_child:
+                    child.visited = 0
+
+            self._new_child = []
+            self._newleft = None
+            self._newmiddle = None
+            self._newright = None
+
+        leaf_at_l = self.openl[self.current_depth].copy()
+
+        update_basket = True
+        true_idx = 0
+        while update_basket and len(leaf_at_l) > 0:
+            best_leaf = leaf_at_l[0]
+            if best_leaf.visited < self.V:
+                print("BORDEL !!! ")
+                best_leaf.visited += 1
+                leaf_at_l.pop(0)
+                true_idx += 1
+            else:
+                update_basket = False
+
+        if len(leaf_at_l) == 0:
+            self.current_depth += 1
+            return self.get_next()
+        else:
+            sel_node = [self.openl[self.current_depth].pop(true_idx)]
+            self.add_close(sel_node)
+            self.current_depth += 1
+            return sel_node
