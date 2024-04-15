@@ -404,7 +404,7 @@ class Styblinsky_tang(Benchmark):
         self,
         lower=-5,
         upper=5,
-        optimum=-39.16599,
+        optimum=-39.16616,
         shift=None,
         rotate=None,
         shuffle=None,
@@ -418,7 +418,7 @@ class Styblinsky_tang(Benchmark):
         z = self.transform(y)
         if self.shuffle is not None:
             z = z[self.shuffle]
-        return {"obj": np.sum(z**4 - 16 * z**2 + 5 * z) / len(z) + self.bias}
+        return {"obj": np.sum(z**4 - 16 * z**2 + 5 * z) / 2 + self.bias}
 
 
 class Alpine(Benchmark):
