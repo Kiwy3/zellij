@@ -581,6 +581,7 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        save_points: bool = True,
     ):
         """__init__
 
@@ -594,6 +595,8 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
             Set the default level of a fractal.
         score : float, optional
             Set the default score of a fractal.
+        save_points : bool, default=False
+            Computed points within the fractal are saved.
         """
         super(BaseFractal, self).__init__(variables)
         self._compute_measure = measurement
@@ -606,6 +609,7 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
 
         self.level = level
         self.score = score
+        self.save_points = save_points
 
         self.solutions = []
         self.losses = np.array([], dtype=float)
@@ -636,19 +640,20 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
             Y : list[float]
                 List of loss values associated to X.
         """
-        self.solutions.extend(X)
-        self.losses = np.append(self.losses, Y)
-        if secondary:
-            if self.secondary_loss:
-                self.secondary_loss = np.vstack((self.secondary_loss, secondary))
-            else:
-                self.secondary_loss = secondary
+        if self.save_points:
+            self.solutions.extend(X)
+            self.losses = np.append(self.losses, Y)
+            if secondary:
+                if self.secondary_loss:
+                    self.secondary_loss = np.vstack((self.secondary_loss, secondary))
+                else:
+                    self.secondary_loss = secondary
 
-        if constraint:
-            if self.constraint_val:
-                self.constraint_val = np.vstack((self.constraint_val, constraint))
-            else:
-                self.constraint_val = secondary
+            if constraint:
+                if self.constraint_val:
+                    self.constraint_val = np.vstack((self.constraint_val, constraint))
+                else:
+                    self.constraint_val = secondary
 
     @abstractmethod
     def create_children(self) -> Sequence[BaseFractal]:

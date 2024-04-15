@@ -16,6 +16,7 @@ import numpy as np
 from itertools import groupby
 import logging
 from bisect import insort_left
+import gc
 
 logger = logging.getLogger("zellij.tree_search")
 
@@ -414,6 +415,7 @@ class BestFirstSearch(TreeSearch):
         insort_left(self.openl, c, key=lambda x: x.score)
 
     def get_next(self):
+        gc.collect()
         sel_nodes = []
         if len(self.openl) > 0:
             sel_nodes = self.openl[: self.Q]
@@ -518,6 +520,7 @@ class BeamSearch(TreeSearch):
             self.openl.pop()
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         if len(self.openl) > 0:
             sel_nodes = self.openl[: self.Q]
@@ -623,6 +626,7 @@ class EpsilonGreedySearch(TreeSearch):
         insort_left(self.openl, c, key=lambda x: x.score)
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         if len(self.openl) > 0:
             idx_min = min(len(self.openl), self.Q)
@@ -757,6 +761,7 @@ class CyclicBestFirstSearch(TreeSearch):
                 self.next_frontier.append(c)
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         if len(self.next_frontier) > 0:
             modified_levels = []
             for h in self.next_frontier:
@@ -895,6 +900,7 @@ class PotentiallyOptimalRectangle(TreeSearch):
             self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         self.maxi1.fill(-float("inf"))
         self.mini2.fill(float("inf"))
@@ -1074,6 +1080,7 @@ class LocallyBiasedPOR(TreeSearch):
             self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         self.maxi1.fill(-float("inf"))
         self.mini2.fill(float("inf"))
@@ -1270,6 +1277,7 @@ class AdaptivePOR(TreeSearch):
             self.openl.pop(0)
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         if np.abs(self.best_score - self.new_best_score) < 1e-4:
             self.best_score = self.new_best_score
             self.new_best_score = float("inf")
@@ -1447,6 +1455,7 @@ class SooTreeSearch(TreeSearch):
         insort_left(self.openl, c, key=lambda x: (x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         if len(self.openl) > 0:
             current_level = self.openl[0].level
@@ -1543,6 +1552,7 @@ class MoveUp(TreeSearch):
         insort_left(self.openl, c, key=lambda x: (-x.level, x.score))
 
     def get_next(self) -> List[BaseFractal]:
+        gc.collect()
         sel_nodes = []
         if len(self.openl) > 0:
             sel_nodes = self.openl[: self.Q]
@@ -1659,6 +1669,7 @@ class NMSOTreeSearch(TreeSearch):
         self._new_child.append(c)
 
     def get_next(self) -> List[NMSOSection]:
+        gc.collect()
         if self.current_depth > self.max_depth:
             self.current_depth = 1
 
