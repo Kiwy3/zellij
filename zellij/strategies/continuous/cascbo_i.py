@@ -39,11 +39,11 @@ from zellij.strategies.tools.turbo_state import (
 
 import numpy as np
 import time
+from datetime import datetime
 
 import os
 import gc
 
-from datetime import datetime
 
 import logging
 
@@ -209,6 +209,7 @@ class CASCBOI(UnitMetaheuristic):
         self.surrogate = surrogate
         self.mll = mll
         self.likelihood = likelihood
+
         self.batch_size = batch_size
         self.budget = budget
         self.temperature = temperature
@@ -666,7 +667,7 @@ class CASCBOI(UnitMetaheuristic):
             if len(self.train_x) > self.beam:
                 self.train_x, self.train_obj, self.train_c, self.train_cost = (
                     self.prune(
-                        self.train_x, self.train_cost, self.train_c, self.train_cost
+                        self.train_x, self.train_obj, self.train_c, self.train_cost
                     )
                 )
 

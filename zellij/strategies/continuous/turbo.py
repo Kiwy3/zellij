@@ -5,13 +5,13 @@
 from __future__ import annotations
 from zellij.core.errors import InputError
 from zellij.core.metaheuristic import UnitMetaheuristic
-from zellij.strategies.tools.turbo_state import async_update_c_state
+from zellij.strategies.tools.turbo_state import async_update_state
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from zellij.core.search_space import UnitSearchspace
-    from zellij.strategies.tools.turbo_state import AsyncCTurboState
+    from zellij.strategies.tools.turbo_state import AsyncTurboState
 
 import torch
 from torch.quasirandom import SobolEngine
@@ -21,7 +21,7 @@ from gpytorch.mlls.sum_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods import GaussianLikelihood
 
 from botorch.models import SingleTaskGP
-from botorch.generation.sampling import ConstrainedMaxPosteriorSampling
+from botorch.generation.sampling import MaxPosteriorSampling
 from botorch.models.transforms.outcome import Standardize
 from botorch.models.model_list_gp_regression import ModelListGP
 from botorch.exceptions import ModelFittingError
@@ -38,20 +38,20 @@ import logging
 logger = logging.getLogger("zellij.scbo")
 
 
-class SCBO(UnitMetaheuristic):
+class TuRBO(UnitMetaheuristic):
     """Scalable Constrained Bayesian Optimization
 
     Works in the unit hypercube. :code:`converter` :ref:`addons` are required.
 
-    See `SCBO <https://botorch.org/tutorials/scalable_constrained_bo>`_.
+    See `TuRBO <https://botorch.org/tutorials/turbo_1>`_.
     It is based on `BoTorch <https://botorch.org/>`_ and `GPyTorch <https://gpytorch.ai/>`__.
 
     Attributes
     ----------
     search_space : ContinuousSearchspace
         Search space object containing bounds of the search space
-    turbo_state : AsyncCTurboState
-        :code:`AsyncCTurboState` object.
+    turbo_state : AsyncTurboState
+        :code:`AsyncTurboState` object.
     verbose : bool
         If False, there will be no print.
     surrogate : botorch.models.model.Model, default=SingleTaskGP
@@ -84,49 +84,12 @@ class SCBO(UnitMetaheuristic):
     :ref:`lf` : Describes what a loss function is in Zellij
     :ref:`sp` : Describes what a loss function is in Zellij
 
-    Examples
-    --------
-    >>> from zellij.core import UnitSearchspace, ArrayVar, FloatVar
-    >>> from zellij.utils import ArrayDefaultC, FloatMinMax
-    >>> from zellij.core import Experiment, Loss, Minimizer, Calls
-    >>> from zellij.strategies.continuous import SCBO
-    >>> from zellij.strategies.tools import CTurboState
-    >>> import torch
-    >>> import numpy as np
-
-    >>> @Loss(objective=Minimizer("obj"), constraint=["c0", "c1"])
-    >>> def himmelblau(x):
-    ...     res = (x[0] ** 2 + x[1] - 11) ** 2 + (x[0] + x[1] ** 2 - 7) ** 2
-    ...     # coordinates must be <0
-    ...     return {"obj": res, "c0": x[0], "c1": x[1]}
-
-
-    >>> a = ArrayVar(
-    ...     FloatVar("f1", -5, 5, converter=FloatMinMax()),
-    ...     FloatVar("i2", -5, 5, converter=FloatMinMax()),
-    ...     converter=ArrayDefaultC(),
-    ... )
-    >>> sp = UnitSearchspace(a)
-    >>> batch_size = 10
-    >>> tstate = CTurboState(sp.size, batch_size, torch.ones(2) * torch.inf)
-
-    >>> opt = SCBO(sp, tstate, batch_size)
-    >>> stop = Calls(himmelblau, 100)
-    >>> exp = Experiment(opt, himmelblau, stop)
-    >>> exp.run()
-    >>> bx = himmelblau.best_point
-    >>> by = himmelblau.best_score
-    >>> cstr = cstr = np.char.mod("%.2f", himmelblau.best_constraint)
-    >>> print(f"f({bx})={by:.2f}, s.t. ({'<0, '.join(cstr)}<0)")
-    f([-3.781168491476484, -3.286043016729221])=0.00, s.t. (-3.78<0, -3.29<0)
-    >>> print(f"Calls: {himmelblau.calls}")
-    Calls: 100
     """
 
     def __init__(
         self,
         search_space: UnitSearchspace,
-        turbo_state: AsyncCTurboState,
+        turbo_state: AsyncTurboState,
         batch_size: int,
         verbose: bool = True,
         surrogate=SingleTaskGP,
@@ -145,8 +108,8 @@ class SCBO(UnitMetaheuristic):
         ----------
         search_space : UnitSearchspace
             UnitSearchspace :ref:`sp`.
-        turbo_state : CTurboState
-            :code:`CTurboState` object.
+        turbo_state : AsyncTurboState
+            :code:`AsyncTurboState` object.
         verbose : bool
             If False, there will be no print.
         surrogate : botorch.models.model.Model, default=SingleTaskGP
@@ -200,8 +163,6 @@ class SCBO(UnitMetaheuristic):
         #############
         # VARIABLES #
         #############
-        self.nconstraint = None
-
         self.turbo_state = turbo_state
 
         # Determine if BO is initialized or not
@@ -225,14 +186,10 @@ class SCBO(UnitMetaheuristic):
         )
         # Prior objective
         self.train_obj = torch.empty((0, 1), dtype=self.dtype, device=self.device)
-        # Prior constraints
-        self.train_c = None
 
         self.sobol = SobolEngine(dimension=self.search_space.size, scramble=True)
 
         self._build_kwargs()
-
-        self.cmodels_list = None
 
         # Count generated models
         self.models_number = 0
@@ -290,7 +247,7 @@ class SCBO(UnitMetaheuristic):
 
         likelihood = self.likelihood(**self.likelihood_kwargs)
 
-        # define models for objective and constraint
+        # define models for objective
         model = self.surrogate(
             train_x,
             train_obj,
@@ -322,9 +279,8 @@ class SCBO(UnitMetaheuristic):
 
     def generate_batch(
         self,
-        state: AsyncCTurboState,
+        state: AsyncTurboState,
         model,  # GP model
-        constraint_model,
         X,  # Evaluated points on the domain [0, 1]^d
         Y,  # Function values
         batch_size,
@@ -370,18 +326,12 @@ class SCBO(UnitMetaheuristic):
         X_cand = x_center.expand(n_candidates, dim).clone()
         X_cand[mask] = pert[mask]
 
-        model.to(self.device)
-        constraint_model.to(self.device)
         # Sample on the candidate points
-        constrained_thompson_sampling = ConstrainedMaxPosteriorSampling(
-            model=model, constraint_model=constraint_model, replacement=False
-        )
+        model.to(self.device)
+        thompson_sampling = MaxPosteriorSampling(model=model, replacement=False)
         with torch.no_grad():  # We don't need gradients when using TS
-            X_next = constrained_thompson_sampling(X_cand, num_samples=batch_size)
-
+            X_next = thompson_sampling(X_cand, num_samples=batch_size)
         model.to("cpu")
-        gc.collect()
-        constraint_model.to("cpu")
         gc.collect()
         return X_next.detach()
 
@@ -396,43 +346,18 @@ class SCBO(UnitMetaheuristic):
             (0, self.search_space.size), dtype=self.dtype, device=self.device
         )
         self.obj = torch.empty((0, 1), dtype=self.dtype, device=self.device)
-        self.train_c = None
 
-    def prune(self, X, Y, constraints):
+    def prune(self, X, Y):
         # Remove worst solutions from the beam
         sidx = torch.argsort(Y.squeeze(), descending=True)
 
         X = X[sidx]
         Y = Y[sidx]
-        constraints = constraints[sidx]
 
-        violation = constraints.sum(dim=1)
-        nvidx = violation < 0
+        filled_x = X[: self.beam]
+        filled_obj = Y[: self.beam]
 
-        new_x = X[nvidx][: self.beam]
-        new_obj = Y[nvidx][: self.beam]
-        new_c = constraints[nvidx][: self.beam]
-
-        if len(new_x) < self.beam:
-            nfill = self.beam - len(new_x)
-            violated = torch.logical_not(nvidx)
-            v_x = X[violated]
-            v_obj = Y[violated]
-            v_c = constraints[violated]
-
-            scidx = torch.argsort(violation[violated].squeeze())[:nfill]
-
-            # update training points
-            filled_x = torch.cat([new_x, v_x[scidx]], dim=0)[: self.beam]
-            filled_obj = torch.cat([new_obj, v_obj[scidx]], dim=0)[: self.beam]
-            filled_c = torch.cat([new_c, v_c[scidx]], dim=0)[: self.beam]
-
-        else:
-            filled_x = new_x[: self.beam]
-            filled_obj = new_obj[: self.beam]
-            filled_c = new_c[: self.beam]
-
-        return filled_x, filled_obj, filled_c
+        return filled_x, filled_obj
 
     def forward(
         self,
@@ -478,7 +403,7 @@ class SCBO(UnitMetaheuristic):
             self.initialized = True
             rdict = {
                 "iteration": self.iterations,
-                "algorithm": "InitSCBO",
+                "algorithm": "InitTuRBO",
                 "ask_date": ask_date,
                 "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                 "length": 1.0,
@@ -488,35 +413,22 @@ class SCBO(UnitMetaheuristic):
                 "greedy": self.turbo_state.greedy_move,
                 "best_value": self.turbo_state.best_value,
             }
-            for idx, c in enumerate(self.turbo_state.best_constraint_values):
-                rdict[f"best_c{idx}"] = c.cpu().item()
             rdict["model"] = -1
             rdict["beam"] = len(self.train_obj)
 
             return train_x, rdict
 
-        elif X is None or Y is None or constraint is None or info is None:
+        elif X is None or Y is None or info is None:
             raise InputError(
-                "After initialization SCBO must receive non-empty X, Y, info, and constraint in forward."
+                "After initialization TuRBO must receive non-empty X, Y and info in forward."
             )
         else:
-            if self.train_c is None or self.nconstraint is None:
-                self.nconstraint = constraint.shape[1]
-                # Prior constraints
-                self.train_c = torch.empty(
-                    (0, self.nconstraint),
-                    dtype=self.dtype,
-                    device=self.device,
-                )
-                self.cmodels_list = [None] * self.nconstraint
-
             self.iterations += 1
 
             new_x = torch.tensor(X, dtype=self.dtype, device=self.device)
             new_obj = -torch.tensor(Y, dtype=self.dtype, device=self.device).unsqueeze(
                 -1
             )
-            new_c = torch.tensor(constraint, dtype=self.dtype, device=self.device)
 
             new_lengths = torch.tensor(
                 info[:, 0], dtype=self.dtype, device=self.device
@@ -531,19 +443,16 @@ class SCBO(UnitMetaheuristic):
             # update training points
             self.train_x = torch.cat([self.train_x, new_x], dim=0)
             self.train_obj = torch.cat([self.train_obj, new_obj], dim=0)
-            self.train_c = torch.cat([self.train_c, new_c], dim=0)
 
             # Remove worst solutions from the beam
             if len(self.train_x) > self.beam:
-                self.train_x, self.train_obj, self.train_c = self.prune(
-                    self.train_x, self.train_obj, self.train_c
-                )
+                self.train_x, self.train_obj = self.prune(self.train_x, self.train_obj)
 
             # If initial size not reached, returns 1 additionnal solution
             if len(self.train_obj) < self.initial_size:
                 rdict = {
                     "iteration": self.iterations,
-                    "algorithm": "AddInitSCBO",
+                    "algorithm": "AddInitTuRBO",
                     "ask_date": ask_date,
                     "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                     "length": 1.0,
@@ -553,17 +462,14 @@ class SCBO(UnitMetaheuristic):
                     "greedy": self.turbo_state.greedy_move,
                     "best_value": self.turbo_state.best_value,
                 }
-                for idx, c in enumerate(self.turbo_state.best_constraint_values):
-                    rdict[f"best_c{idx}"] = c.cpu().item()
                 rdict["model"] = -1
                 rdict["beam"] = len(self.train_obj)
                 return self._generate_initial_data(1), rdict
             else:
-                self.turbo_state = async_update_c_state(
+                self.turbo_state = async_update_state(
                     state=self.turbo_state,
                     X_next=new_x,
                     Y_next=new_obj,
-                    C_next=new_c,
                     lengths=new_lengths,
                     successes=new_successes,
                     failures=new_failures,
@@ -588,7 +494,7 @@ class SCBO(UnitMetaheuristic):
                     except ModelFittingError:
                         rdict = {
                             "iteration": self.iterations,
-                            "algorithm": "FailedSCBO",
+                            "algorithm": "FailedTuRBO",
                             "ask_date": ask_date,
                             "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                             "length": 1.0,
@@ -598,46 +504,18 @@ class SCBO(UnitMetaheuristic):
                             "greedy": self.turbo_state.greedy_move,
                             "best_value": self.turbo_state.best_value,
                         }
-                        for idx, c in enumerate(
-                            self.turbo_state.best_constraint_values
-                        ):
-                            rdict[f"best_c{idx}"] = c.cpu().item()
                         rdict["model"] = -1
                         rdict["beam"] = len(self.train_obj)
-
                         return self._generate_initial_data(len(Y)), rdict
 
                     model.to("cpu")
                     gc.collect()
                     torch.cuda.empty_cache()
 
-                    # Update constraint models
-                    for icon in range(self.nconstraint):
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        cmll, cmodel = self._initialize_model(
-                            self.train_x,
-                            self.train_c[:, icon].unsqueeze(-1),
-                            state_dict=None,
-                        )
-                        try:
-                            fit_gpytorch_mll(cmll)
-                            cmodel.to("cpu")
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            self.cmodels_list[icon] = cmodel  # type: ignore
-                        except ModelFittingError:
-                            logger.warning(
-                                f"In SCBO, ModelFittingError for constraint{icon}, previous fitted model will be used."
-                            )
-                    # Update Cost model
-                    gc.collect()
-                    torch.cuda.empty_cache()
                     # optimize and get new observation
                     new_x = self.generate_batch(
                         state=self.turbo_state,
                         model=model,
-                        constraint_model=ModelListGP(*self.cmodels_list),  # type: ignore
                         X=self.train_x,
                         Y=self.train_obj,
                         batch_size=self.batch_size,
@@ -645,11 +523,11 @@ class SCBO(UnitMetaheuristic):
                     )
 
                     if self._save:
-                        self.save(model, self.cmodels_list)
+                        self.save(model)
 
                     rdict = {
                         "iteration": self.iterations,
-                        "algorithm": "SCBO",
+                        "algorithm": "TuRBO",
                         "ask_date": ask_date,
                         "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                         "length": self.turbo_state.length,
@@ -659,8 +537,6 @@ class SCBO(UnitMetaheuristic):
                         "greedy": self.turbo_state.greedy_move,
                         "best_value": self.turbo_state.best_value,
                     }
-                    for idx, c in enumerate(self.turbo_state.best_constraint_values):
-                        rdict[f"best_c{idx}"] = c.cpu().item()
                     rdict["model"] = self.models_number
                     rdict["beam"] = len(self.train_obj)
 
@@ -674,7 +550,7 @@ class SCBO(UnitMetaheuristic):
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def save(self, model, cmodels):
+    def save(self, model):
         path = self._save
         foldername = os.path.join(path, "scbo")
         if not os.path.exists(foldername):
@@ -687,11 +563,4 @@ class SCBO(UnitMetaheuristic):
             std_dict,
             os.path.join(foldername, f"{self.models_number}_model.pth"),
         )
-        for idx, m in enumerate(cmodels):
-            std_dict = m.state_dict()
-            std_dict["nlengthscale"] = m.covar_module.base_kernel.lengthscale
-            torch.save(
-                std_dict,
-                os.path.join(foldername, f"{self.models_number}_c{idx}model.pth"),
-            )
         self.models_number += 1

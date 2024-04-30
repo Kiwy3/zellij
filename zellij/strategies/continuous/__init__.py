@@ -7,5 +7,6 @@ from .bayesian_optimization import BayesianOptimization
 from .scbo import SCBO
 from .cascbo import CASCBO
 from .cascbo_i import CASCBOI
+from .turbo import TuRBO
 from .cost_aware import CostAwareBO
 from .chaos_algorithm import CGS, CLS, CFS, ChaoticOptimization

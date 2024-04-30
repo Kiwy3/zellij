@@ -35,42 +35,120 @@ logger = logging.getLogger("zellij.turbotools")
 
 
 @dataclass
-class TurboState:
+class AsyncTurboState:
     dim: int
     batch_size: int
-    length: float = 1.0
+    length: float = 0.8
     length_min: float = 0.5**7
     length_max: float = 1.6
     failure_counter: int = 0
-    failure_tolerance: int = float("nan")  # type: ignore
+    failure_tolerance: int = 2
     success_counter: int = 0
-    success_tolerance: int = 3  # Note: The original paper uses 3
+    success_tolerance: int = 2
+    best_point: Optional[Tensor] = None
     best_value: float = -float("inf")
     restart_triggered: bool = False
+    current_lbounds: Optional[Tensor] = None
+    current_ubounds: Optional[Tensor] = None
+    greedy_move: bool = False
 
     def __post_init__(self):
-        self.failure_tolerance = math.ceil(
-            max([4.0 / self.batch_size, float(self.dim) / self.batch_size])
-        )
+        self.current_lbounds = torch.zeros(self.dim)
+        self.current_ubounds = torch.ones(self.dim)
+        self.best_point = torch.zeros(self.dim)
+
+    def reset(self):
+        self.length = 0.8
+        self.length_min = 0.5**7
+        self.length_max = 1.6
+        self.failure_counter = 0
+        self.failure_tolerance = 2
+        self.success_counter = 0
+        self.success_tolerance = 2
+        self.restart_triggered = False
+        self.current_lbounds = torch.zeros(self.dim)
+        self.current_ubounds = torch.ones(self.dim)
+        self.greedy_move = False
 
 
-def update_state(state, Y_next):
-    if max(Y_next) > state.best_value + 1e-3 * math.fabs(state.best_value):
-        state.success_counter += 1
-        state.failure_counter = 0
+def get_best_index_for_batch(Y: Tensor):
+    """Return the index for the best point."""
+    return Y.argmax()
+
+
+def async_update_state(state, X_next, Y_next, lengths, successes, failures, eps=1e-5):
+    """Method used to update the TuRBO state after each step of optimization.
+
+    Success and failure counters are updated according to the objective values
+    (Y_next) and constraint values (C_next) of the batch of candidate points
+    evaluated on the optimization step.
+
+    As in the original TuRBO paper, a success is counted whenver any one of the
+    new candidate points improves upon the incumbent best point. The key difference
+    for SCBO is that we only compare points by their objective values when both points
+    are valid (meet all constraints). If exactly one of the two points being compared
+    violates a constraint, the other valid point is automatically considered to be better.
+    If both points violate some constraints, we compare them inated by their constraint values.
+    The better point in this case is the one with minimum total constraint violation
+    (the minimum sum of constraint values)"""
+
+    # Pick the best point from the batch
+    best_idx = get_best_index_for_batch(Y=Y_next)
+    x_next = X_next[best_idx]
+    y_next = Y_next[best_idx]
+    l_next = lengths[best_idx]
+    s_next = successes[best_idx]
+    f_next = failures[best_idx]
+
+    current_lbounds = state.current_lbounds.clone().to(x_next.device)
+    current_ubounds = state.current_ubounds.clone().to(x_next.device)
+
+    in_tr_x = torch.all((x_next >= current_lbounds) & (x_next <= current_ubounds))
+
+    # Greedy within this context != historic of greedy move in state
+    instant_greedy_move = False
+    next_length = -1
+
+    # At least one new candidate is feasible
+    p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
+    # In TR
+    if y_next > p_improvement_threshold:
+        state.best_point = torch.Tensor(x_next)
+        state.best_value = y_next.item()
+        if in_tr_x:
+            state.greedy_move = False
+            state.success_counter += 1
+            state.failure_counter = 0
+        else:
+            state.greedy_move = True
+            instant_greedy_move = True
+            state.success_counter = 0
+            state.failure_counter = 0
+            next_length = l_next.item()
+            next_successes = s_next.item()
     else:
         state.success_counter = 0
         state.failure_counter += 1
 
-    if state.success_counter == state.success_tolerance:  # Expand trust region
+    # Finally, update the length of the trust region according to the
+    # updated success and failure counters
+    # Update the length of the trust region according to
+    # success and failure counters
+    # (Just as in original TuRBO paper)
+    if instant_greedy_move:
+        state.length = next_length
+        if next_successes > 0:
+            state.success_counter = next_successes + 1
+        else:
+            state.failure_counter = 0
+    elif state.success_counter == state.success_tolerance:  # Expand trust region
         state.length = min(2.0 * state.length, state.length_max)
         state.success_counter = 0
     elif state.failure_counter == state.failure_tolerance:  # Shrink trust region
         state.length /= 2.0
         state.failure_counter = 0
 
-    state.best_value = max(state.best_value, max(Y_next).item())
-    if state.length < state.length_min:
+    if state.length < state.length_min:  # Restart when trust region becomes too small
         state.restart_triggered = True
 
     return state
@@ -131,7 +209,7 @@ class CTurboState:
         )
 
 
-def get_best_index_for_batch(Y: Tensor, C: Tensor):
+def c_get_best_index_for_batch(Y: Tensor, C: Tensor):
     """Return the index for the best point."""
     is_feas = (C <= 0).all(dim=-1)
     if is_feas.any():  # Choose best feasible candidate
@@ -158,7 +236,7 @@ def update_c_state(state, Y_next, C_next):
     (the minimum sum of constraint values)"""
 
     # Pick the best point from the batch
-    best_ind = get_best_index_for_batch(Y=Y_next, C=C_next)
+    best_ind = c_get_best_index_for_batch(Y=Y_next, C=C_next)
     y_next, c_next = Y_next[best_ind], C_next[best_ind]
 
     if (c_next <= 0).all():
@@ -190,23 +268,149 @@ def update_c_state(state, Y_next, C_next):
     return state
 
 
-def iget_best_index_for_batch(Y: Tensor, C: Tensor, Cost: Tensor):
-    """Return the index for the best point."""
-    is_feas = (C <= 0).all(dim=-1)
-    if is_feas.any():  # Choose best feasible candidate
-        score = Y.clone()
-        costs = Cost.clone()
+@dataclass
+class AsyncCTurboState:
+    dim: int
+    batch_size: int
+    best_constraint_values: Tensor
+    length: float = 0.8
+    length_min: float = 0.5**7
+    length_max: float = 1.6
+    failure_counter: int = 0
+    failure_tolerance: int = 2
+    success_counter: int = 0
+    success_tolerance: int = 2
+    best_point: Optional[Tensor] = None
+    best_value: float = -float("inf")
+    restart_triggered: bool = False
+    current_lbounds: Optional[Tensor] = None
+    current_ubounds: Optional[Tensor] = None
+    greedy_move: bool = False
 
-        score[~is_feas] = -float("inf")
-        best_idx = score.argmax()
-        bscore = score[best_idx]
-        mask = score == bscore
-        if len(costs[~mask]) > 1:
-            costs[~mask] = float("inf")
-            best_idx = costs.argmin()
+    def __post_init__(self):
+        self.current_lbounds = torch.zeros(self.dim)
+        self.current_ubounds = torch.ones(self.dim)
+        self.best_point = torch.zeros(self.dim)
 
-        return best_idx
-    return C.clamp(min=0).sum(dim=-1).argmin()
+    def reset(self):
+        self.best_constraint_values = (
+            torch.ones_like(self.best_constraint_values) * torch.inf
+        )
+        self.length = 0.8
+        self.length_min = 0.5**7
+        self.length_max = 1.6
+        self.failure_counter = 0
+        self.failure_tolerance = 2
+        self.success_counter = 0
+        self.success_tolerance = 2
+        self.restart_triggered = False
+        self.current_lbounds = torch.zeros(self.dim)
+        self.current_ubounds = torch.ones(self.dim)
+        self.greedy_move = False
+
+
+def async_update_c_state(
+    state, X_next, Y_next, C_next, lengths, successes, failures, eps=1e-5
+):
+    """Method used to update the TuRBO state after each step of optimization.
+
+    Success and failure counters are updated according to the objective values
+    (Y_next) and constraint values (C_next) of the batch of candidate points
+    evaluated on the optimization step.
+
+    As in the original TuRBO paper, a success is counted whenver any one of the
+    new candidate points improves upon the incumbent best point. The key difference
+    for SCBO is that we only compare points by their objective values when both points
+    are valid (meet all constraints). If exactly one of the two points being compared
+    violates a constraint, the other valid point is automatically considered to be better.
+    If both points violate some constraints, we compare them inated by their constraint values.
+    The better point in this case is the one with minimum total constraint violation
+    (the minimum sum of constraint values)"""
+
+    # Pick the best point from the batch
+    best_idx = c_get_best_index_for_batch(Y=Y_next, C=C_next)
+    x_next = X_next[best_idx]
+    y_next = Y_next[best_idx]
+    c_next = C_next[best_idx]
+    l_next = lengths[best_idx]
+    s_next = successes[best_idx]
+    f_next = failures[best_idx]
+
+    current_lbounds = state.current_lbounds.clone().to(x_next.device)
+    current_ubounds = state.current_ubounds.clone().to(x_next.device)
+
+    in_tr_x = torch.all((x_next >= current_lbounds) & (x_next <= current_ubounds))
+
+    # Greedy within this context != historic of greedy move in state
+    instant_greedy_move = False
+    next_length = -1
+    if (c_next <= 0).all():
+        # At least one new candidate is feasible
+        p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
+        # In TR
+        if y_next > p_improvement_threshold or (state.best_constraint_values > 0).any():
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            if in_tr_x:
+                state.greedy_move = False
+                state.success_counter += 1
+                state.failure_counter = 0
+            else:
+                state.greedy_move = True
+                instant_greedy_move = True
+                state.success_counter = 0
+                state.failure_counter = 0
+                next_length = l_next.item()
+                next_successes = s_next.item()
+        else:
+            state.success_counter = 0
+            state.failure_counter += 1
+    else:
+        # No new candidate is feasible
+        total_violation_next = c_next.clamp(min=0).sum(dim=-1)
+        total_violation_center = state.best_constraint_values.clamp(min=0).sum(dim=-1)
+        if total_violation_next < total_violation_center:
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            if in_tr_x:
+                state.greedy_move = False
+                state.success_counter += 1
+                state.failure_counter = 0
+            else:
+                state.greedy_move = True
+                instant_greedy_move = True
+                state.success_counter = 0
+                state.failure_counter = 0
+                next_length = l_next.item()
+                next_successes = s_next.item()
+        else:
+            state.success_counter = 0
+            state.failure_counter += 1
+
+    # Finally, update the length of the trust region according to the
+    # updated success and failure counters
+    # Update the length of the trust region according to
+    # success and failure counters
+    # (Just as in original TuRBO paper)
+    if instant_greedy_move:
+        state.length = next_length
+        if next_successes > 0:
+            state.success_counter = next_successes + 1
+        else:
+            state.failure_counter = 0
+    elif state.success_counter == state.success_tolerance:  # Expand trust region
+        state.length = min(2.0 * state.length, state.length_max)
+        state.success_counter = 0
+    elif state.failure_counter == state.failure_tolerance:  # Shrink trust region
+        state.length /= 2.0
+        state.failure_counter = 0
+
+    if state.length < state.length_min:  # Restart when trust region becomes too small
+        state.restart_triggered = True
+
+    return state
 
 
 @dataclass
@@ -246,6 +450,25 @@ class ICTurboState:
         self.current_lbounds = torch.zeros(self.dim)
         self.current_ubounds = torch.ones(self.dim)
         self.greedy_move = False
+
+
+def iget_best_index_for_batch(Y: Tensor, C: Tensor, Cost: Tensor):
+    """Return the index for the best point."""
+    is_feas = (C <= 0).all(dim=-1)
+    if is_feas.any():  # Choose best feasible candidate
+        score = Y.clone()
+        costs = Cost.clone()
+
+        score[~is_feas] = -float("inf")
+        best_idx = score.argmax()
+        bscore = score[best_idx]
+        mask = score == bscore
+        if len(costs[~mask]) > 1:
+            costs[~mask] = float("inf")
+            best_idx = costs.argmin()
+
+        return best_idx
+    return C.clamp(min=0).sum(dim=-1).argmin()
 
 
 def iupdate_c_state(
