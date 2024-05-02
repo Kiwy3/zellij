@@ -25,7 +25,7 @@ from botorch.utils import standardize
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
 from botorch.acquisition.analytic import ExpectedImprovement
-from botorch import fit_gpytorch_model
+from botorch import fit_gpytorch_mll
 from botorch.exceptions import ModelFittingError
 
 from torch.quasirandom import SobolEngine
@@ -385,7 +385,7 @@ class BayesianOptimization(UnitMetaheuristic):
                     with gpytorch.settings.max_cholesky_size(300):
                         # run N_BATCH rounds of BayesOpt after the initial random batch
                         # fit the models
-                        fit_gpytorch_model(mll)
+                        fit_gpytorch_mll(mll)
 
                         # Add potentially usefull kwargs for acqf kwargs
                         self.acqf_kwargs["best_f"] = torch.max(train_obj_std)
