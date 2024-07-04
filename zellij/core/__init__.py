@@ -23,7 +23,6 @@ from .stop import (
     BooleanStop,
     Time,
     ErrorConvergence,
+    PercentageErrorConvergence,
 )
 from .backup import AutoSave, load_backup
-
-from .metaheuristic import MockMixedMeta

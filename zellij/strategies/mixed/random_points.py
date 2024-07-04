@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 from zellij.core.errors import InitializationError
-from zellij.core.metaheuristic import Metaheuristic
+from zellij.core.metaheuristic import Metaheuristic, MonoObjective
 
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
@@ -19,7 +19,7 @@ import logging
 logger = logging.getLogger("zellij.RD")
 
 
-class Random(Metaheuristic):
+class Random(Metaheuristic, MonoObjective):
     """Random
 
     Samples random points from  the search space.
@@ -106,10 +106,10 @@ class Random(Metaheuristic):
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of CGS.
 
@@ -128,4 +128,4 @@ class Random(Metaheuristic):
 
         solutions = self.search_space.random_point(self.size)
 
-        return solutions, {"algorithm": "Random"}
+        return solutions, {"algorithm": "Random"}, {}

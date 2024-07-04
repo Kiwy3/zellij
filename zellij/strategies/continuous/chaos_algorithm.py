@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 from zellij.core.search_space import ContinuousSearchspace
-from zellij.core.metaheuristic import ContinuousMetaheuristic
+from zellij.core.metaheuristic import ContinuousMetaheuristic, MonoObjective
 
 from typing import Tuple, Optional, List, TYPE_CHECKING
 
@@ -20,7 +20,7 @@ import logging
 logger = logging.getLogger("zellij.CO")
 
 
-class CGS(ContinuousMetaheuristic):
+class CGS(ContinuousMetaheuristic, MonoObjective):
     """
     CGS is an exploration :ref:`meta` using chaos to violently move in the :ref:`sp`.
     It uses a :ref:`cmap`, such as Henon or Kent map.
@@ -129,10 +129,10 @@ class CGS(ContinuousMetaheuristic):
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of CGS.
 
@@ -176,10 +176,10 @@ class CGS(ContinuousMetaheuristic):
 
         logger.info("CGS forward done")
 
-        return points.tolist(), {"algorithm": "CGS", "seed": self.map.seed}
+        return points.tolist(), {"algorithm": "CGS", "seed": self.map.seed}, {}
 
 
-class CLS(ContinuousMetaheuristic):
+class CLS(ContinuousMetaheuristic, MonoObjective):
     """
     CLS is an exploitation :ref:`meta` using chaos to wiggle points arround an initial solution.
     It uses a rotating polygon to distribute those points, a progressive and mooving zoom on the best solution found, to refine it.
@@ -301,10 +301,10 @@ class CLS(ContinuousMetaheuristic):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of CLS.
         CLS is a local search and needs a starting point.
@@ -396,10 +396,10 @@ class CLS(ContinuousMetaheuristic):
 
         logger.info("CLS forward ending")
 
-        return points.tolist(), {"algorithm": "CLS", "seed": self.map.seed}
+        return points.tolist(), {"algorithm": "CLS", "seed": self.map.seed}, {}
 
 
-class CFS(ContinuousMetaheuristic):
+class CFS(ContinuousMetaheuristic, MonoObjective):
     """
     CFS is an exploitation :ref:`meta` using chaos to wiggle points arround an initial solution.\
     Contrary to CLS, CFS uses an exponential zoom on the best solution found, it works at a much smaller scale than the CLS.
@@ -530,10 +530,10 @@ class CFS(ContinuousMetaheuristic):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Runs one step of CFS.
@@ -555,6 +555,9 @@ class CFS(ContinuousMetaheuristic):
             Additionnal information linked to :code:`points`
 
         """
+
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
 
         logger.info("CLS starting")
 
@@ -605,10 +608,10 @@ class CFS(ContinuousMetaheuristic):
 
         logger.info("CLS forward ending")
 
-        return points.tolist(), {"algorithm": "CFS", "seed": self.map.seed}
+        return points.tolist(), {"algorithm": "CFS", "seed": self.map.seed}, {}
 
 
-class ChaoticOptimization(ContinuousMetaheuristic):
+class ChaoticOptimization(ContinuousMetaheuristic, MonoObjective):
     """ChaoticOptimization
 
     Chaotic optimization combines CGS, CLS and CFS.
@@ -757,7 +760,7 @@ class ChaoticOptimization(ContinuousMetaheuristic):
         self.cls.reset()
         self.cfs.reset()
 
-    def _do_cgs(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict]:
+    def _do_cgs(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict, dict]:
         self.cgs.map.sample(np.random.randint(0, 1000000))
         # Outer loop (exploration)
         logger.info("Chaotic optimization: Exploration phase")
@@ -771,11 +774,13 @@ class ChaoticOptimization(ContinuousMetaheuristic):
         # Else select random point for the exploitation
         else:
             logger.warning("Chaotic optimization: using random instead of CGS")
-            return np.random.random((1, self.search_space.size)).tolist(), {
-                "algorithm": "random"
-            }
+            return (
+                np.random.random((1, self.search_space.size)).tolist(),
+                {"algorithm": "random"},
+                {},
+            )
 
-    def _do_cls(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict]:
+    def _do_cls(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict, dict]:
         self.cls.map.sample(np.random.randint(0, 1000000))
 
         self.CLS_switch = False
@@ -783,7 +788,7 @@ class ChaoticOptimization(ContinuousMetaheuristic):
 
         return self.cls.forward(X, Y)
 
-    def _do_cfs(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict]:
+    def _do_cfs(self, X: list, Y: np.ndarray) -> Tuple[List[list], dict, dict]:
         self.cfs.map.sample(np.random.randint(0, 1000000))
 
         self.CLS_switch = True
@@ -795,10 +800,10 @@ class ChaoticOptimization(ContinuousMetaheuristic):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ):
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Runs one step of CO.

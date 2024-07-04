@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 from zellij.core.errors import InputError
-from zellij.core.metaheuristic import UnitMetaheuristic
+from zellij.core.metaheuristic import UnitMetaheuristic, MultiObjective
 
 from abc import abstractmethod, ABC
 from typing import Tuple, List, Optional, TYPE_CHECKING
@@ -90,11 +90,10 @@ class AcquisitionWithCost(AnalyticAcquisitionFunction):
     def forward(self, X):
         acq = self.acquisition(X)
         cost = torch.pow(self.cost_model(X)[:, 0], self.alpha)
-        print(f"ACQ/COST: {acq}/{cost}")
         return acq / cost
 
 
-class CostAwareBO(UnitMetaheuristic):
+class CostAwareBO(UnitMetaheuristic, MultiObjective):
     """CostAwareBO
 
     Cost-Aware Bayesian Optimization
@@ -375,10 +374,10 @@ class CostAwareBO(UnitMetaheuristic):
         self,
         X: Optional[list],
         Y: Optional[np.ndarray],
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Abstract method describing one step of the :ref:`meta`.
@@ -398,15 +397,23 @@ class CostAwareBO(UnitMetaheuristic):
             Dictionnary of additionnal information linked to :code:`points`.
         """
 
+        if Y is not None:
+            secondary = Y[:, 1]
+            Y = Y[:, 0]
+
         if not self.initialized:
             # call helper functions to generate initial training data and initialize model
             train_x = self._generate_initial_data()
             self.initialized = True
-            return train_x, {
-                "iteration": self.iterations,
-                "algorithm": "InitCArBO",
-                "model": -1,
-            }
+            return (
+                train_x,
+                {
+                    "iteration": self.iterations,
+                    "algorithm": "InitCArBO",
+                    "model": -1,
+                },
+                {},
+            )
         elif X is None or Y is None or secondary is None:
             raise InputError(
                 "After initialization Bayesian optimization must receive non-empty X, Y and secondary in forward."
@@ -420,7 +427,7 @@ class CostAwareBO(UnitMetaheuristic):
                 -1
             )
             new_c = torch.tensor(
-                secondary[:, 0], dtype=self.dtype, device=self.device
+                secondary, dtype=self.dtype, device=self.device
             ).unsqueeze(-1)
             # update training points
             self.train_x = torch.cat([self.train_x, new_x], dim=0)
@@ -429,11 +436,15 @@ class CostAwareBO(UnitMetaheuristic):
 
             # If initial size not reached, returns 1 additionnal solution
             if len(self.train_obj) < self.initial_size:
-                return self.search_space.random_point(1), {
-                    "iteration": self.iterations,
-                    "algorithm": "AddInitCArBO",
-                    "model": -1,
-                }
+                return (
+                    self.search_space.random_point(1),
+                    {
+                        "iteration": self.iterations,
+                        "algorithm": "AddInitCArBO",
+                        "model": -1,
+                    },
+                    {},
+                )
             else:
                 if self.time_budget:
                     elapsed = time.time() - self.start_time
@@ -452,11 +463,15 @@ class CostAwareBO(UnitMetaheuristic):
                     try:
                         fit_gpytorch_mll(mll)
                     except ModelFittingError:
-                        return self.search_space.random_point(len(Y)), {
-                            "iteration": self.iterations,
-                            "algorithm": "FailedCArBO",
-                            "model": -1,
-                        }
+                        return (
+                            self.search_space.random_point(len(Y)),
+                            {
+                                "iteration": self.iterations,
+                                "algorithm": "FailedCArBO",
+                                "model": -1,
+                            },
+                            {},
+                        )
 
                 cost_model = CostModelGP(self.train_x, self.train_c)
                 self.acqf_kwargs["best_f"] = torch.max(train_obj_std)
@@ -475,8 +490,12 @@ class CostAwareBO(UnitMetaheuristic):
                 # optimize and get new observation
                 new_x, acqf_value = self._optimize_acqf_and_get_observation(acqf)
 
-                return new_x.cpu().numpy().tolist(), {
-                    "acquisition": acqf_value.cpu().item(),
-                    "algorithm": "CArBO",
-                    "model": self.iterations,
-                }
+                return (
+                    new_x.cpu().numpy().tolist(),
+                    {
+                        "acquisition": acqf_value.cpu().item(),
+                        "algorithm": "CArBO",
+                        "model": self.iterations,
+                    },
+                    {},
+                )

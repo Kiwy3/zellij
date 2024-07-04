@@ -3,15 +3,17 @@
 # Project: Zellij
 # License: CeCILL-C (http://www.cecill.info/index.fr.html)
 
-from .dba import DBA, DBADirect
-from .ils import ILS, ILSRandom
+from .dba import DBA, DBADirect, DBASampling
+from .ils import ILS, ILSRandom, ILSLHS
 from .phs import PHS
 from .sampling import (
+    Sampling,
     Center,
     CenterSOO,
     Diagonal,
     ChaosSampling,
-    ChaosHypersphere,
+    # ChaosHypersphere,
     DirectSampling,
     Base,
+    Random,
 )

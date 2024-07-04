@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 from zellij.core.errors import InputError
-from zellij.core.metaheuristic import UnitMetaheuristic
+from zellij.core.metaheuristic import UnitMetaheuristic, MonoObjective
 
 from typing import Tuple, List, Optional, TYPE_CHECKING
 
@@ -35,7 +35,7 @@ import logging
 logger = logging.getLogger("zellij.BO")
 
 
-class BayesianOptimization(UnitMetaheuristic):
+class BayesianOptimization(UnitMetaheuristic, MonoObjective):
     """BayesianOptimization
 
     Bayesian optimization (BO) is a surrogate based optimization method which
@@ -314,10 +314,10 @@ class BayesianOptimization(UnitMetaheuristic):
         self,
         X: Optional[list],
         Y: Optional[np.ndarray],
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
         info: Optional[np.ndarray],
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Abstract method describing one step of the :ref:`meta`.
@@ -337,16 +337,23 @@ class BayesianOptimization(UnitMetaheuristic):
             Dictionnary of additionnal information linked to :code:`points`.
         """
 
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
+
         if not self.initialized:
             self.iteration = 1
 
             # call helper functions to generate initial training data and initialize model
             train_x = self._generate_initial_data(n=self.initial_size)
             self.initialized = True
-            return train_x.cpu().numpy().tolist(), {
-                "acquisition": 0,
-                "algorithm": "InitBO",
-            }
+            return (
+                train_x.cpu().numpy().tolist(),
+                {
+                    "acquisition": 0,
+                    "algorithm": "InitBO",
+                },
+                {},
+            )
         elif X is None or Y is None:
             raise InputError(
                 "After initialization Bayesian optimization must receive non-empty X and Y in forward."
@@ -403,19 +410,31 @@ class BayesianOptimization(UnitMetaheuristic):
                             acqf
                         )
 
-                        return new_x.cpu().numpy().tolist(), {
-                            "acquisition": acqf_value.cpu().item(),
-                            "algorithm": "BO",
-                        }
+                        return (
+                            new_x.cpu().numpy().tolist(),
+                            {
+                                "acquisition": acqf_value.cpu().item(),
+                                "algorithm": "BO",
+                            },
+                            {},
+                        )
                 except ModelFittingError:
                     new_x = self._generate_initial_data(1)
-                    return new_x.cpu().numpy().tolist(), {
-                        "acquisition": 0,
-                        "algorithm": "ModelFittingError",
-                    }
+                    return (
+                        new_x.cpu().numpy().tolist(),
+                        {
+                            "acquisition": 0,
+                            "algorithm": "ModelFittingError",
+                        },
+                        {},
+                    )
             else:
                 new_x = self._generate_initial_data(1)
-                return new_x.cpu().numpy().tolist(), {
-                    "acquisition": 0,
-                    "algorithm": "ResampleBO",
-                }
+                return (
+                    new_x.cpu().numpy().tolist(),
+                    {
+                        "acquisition": 0,
+                        "algorithm": "ResampleBO",
+                    },
+                    {},
+                )

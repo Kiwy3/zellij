@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from zellij.core.search_space import BaseFractal, Fractal
+    from zellij.strategies.tools.geometry import LatinHypercubeUCB
     from zellij.core.loss_func import SequentialLoss
 
 import numpy as np
@@ -126,15 +127,38 @@ class Improvement(Scoring):
             Minimal score found.
 
         """
-        if len(fractal.losses) > 0:
-            minl = np.min(fractal.losses)
-            if np.isfinite(fractal.score):
-                ok = minl - fractal.score
-                return ok
-            else:
-                return minl
+        if np.isfinite(fractal.best_loss_parent):
+            return fractal.best_loss - fractal.best_loss_parent
         else:
-            return fractal.score
+            return -float("inf")
+
+
+class UCB(Scoring):
+    """Upper Confidence Bound
+
+    Returns
+    -------
+    out : float
+        UCB
+    """
+
+    def __call__(self, fractal: LatinHypercubeUCB):
+        """__call__(fractal)
+
+        Parameters
+        ----------
+        fractal : Fractal
+            Fractal containing all solutions sampled within it,
+            and their corresponding objective losses.
+
+        Returns
+        -------
+        out : float
+            Minimal score found.
+
+        """
+        fractal.mean = np.mean(fractal.losses)
+        fractal.var = np.var(fractal.losses)
 
 
 class Nothing(Scoring):
@@ -405,7 +429,11 @@ class DistanceToTheBest(Scoring):
 
         """
         if len(fractal.losses) > 0:
-            best_ind = self.loss.best_point
+            if fractal._do_convert:
+                best_ind = fractal.convert([self.loss.best_point[0]])[0]
+            else:
+                best_ind = self.loss.best_point[0]
+
             distances = [
                 fractal.distance(s, best_ind) + 1e-20 for s in fractal.solutions
             ]
@@ -475,8 +503,13 @@ class DistanceToTheBestCentered(Scoring):
             Distance to the best solution found so far.
 
         """
+        if fractal._do_convert:
+            best_ind = fractal.convert([self.loss.best_point[0]])[0]
+        else:
+            best_ind = self.loss.best_point[0]
+
         if len(fractal.losses) > 0:
-            best_ind = self.loss.best_point
+            best_ind = self.loss.best_point[0]
             distances = [
                 fractal.distance(s, best_ind) + 1e-20 for s in fractal.solutions
             ]

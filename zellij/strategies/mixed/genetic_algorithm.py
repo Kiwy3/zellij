@@ -4,7 +4,7 @@
 # License: CeCILL-C (http://www.cecill.info/index.fr.html)
 
 from __future__ import annotations
-from zellij.core.metaheuristic import Metaheuristic
+from zellij.core.metaheuristic import Metaheuristic, MonoObjective
 from zellij.core.errors import InputError
 
 from typing import List, Tuple, Optional, TYPE_CHECKING
@@ -27,7 +27,7 @@ creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMin)  # type: ignore
 
 
-class GeneticAlgorithm(Metaheuristic):
+class GeneticAlgorithm(Metaheuristic, MonoObjective):
     """GeneticAlgorithm
 
     GeneticAlgorithm (GA) implements a usual genetic algorithm.
@@ -244,10 +244,10 @@ class GeneticAlgorithm(Metaheuristic):
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of GA.
 
@@ -262,6 +262,9 @@ class GeneticAlgorithm(Metaheuristic):
 
         """
 
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
+
         logger.info("GA Starting")
 
         if not self.initialized:
@@ -275,14 +278,14 @@ class GeneticAlgorithm(Metaheuristic):
 
                 logger.info("Evaluating the initial population...")
                 solutions = [p[0] for p in pop]
-                return solutions, {"algorithm": "GA", "generation": 0}
+                return solutions, {"algorithm": "GA", "generation": 0}, {}
 
         if X is None:
             raise InputError(
                 "In GeneticAlgorithm,  X and Y cannot be of NoneType after initialization."
             )
         elif Y is None:
-            return X, {"algorithm": "GA", "generation": 0}
+            return X, {"algorithm": "GA", "generation": 0}, {}
         else:
             o_fitnesses = Y
             offspring = self.toolbox.population_guess(X)
@@ -343,7 +346,7 @@ class GeneticAlgorithm(Metaheuristic):
             # End population evaluation
             logger.info(f"Evaluating n°{self.g}...")
 
-            return solutions, {"algorithm": "GA", "generation": self.g}
+            return solutions, {"algorithm": "GA", "generation": self.g}, {}
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -591,15 +594,15 @@ class SteadyStateGA(Metaheuristic):
 
         return solutions
 
-    # Run GA
+    # Run SGA
     def forward(
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of GA.
 
@@ -625,14 +628,14 @@ class SteadyStateGA(Metaheuristic):
 
                 logger.info("Evaluating the initial population...")
                 solutions = [p[0] for p in pop]
-                return solutions, {"algorithm": "GA", "generation": 0}
+                return solutions, {"algorithm": "SSGA", "generation": 0}, {}
 
         if X is None:
             raise InputError(
                 "In SteadyStateGA,  X and Y cannot be of NoneType after initialization."
             )
         elif Y is None:
-            return X, {"algorithm": "GA", "generation": 0}
+            return X, {"algorithm": "SSGA", "generation": 0}, {}
         else:
             children = []
             # Map computed fitness to individual fitness value
@@ -649,9 +652,9 @@ class SteadyStateGA(Metaheuristic):
 
             if len(self.pop) >= self.pop_size:
                 sol = self._do_selcrossmut()
-                return sol, {"algorithm": "GA"}
+                return sol, {"algorithm": "SSGA"}, {}
             else:
-                return [self.search_space.random_point(1)], {"algorithm": "SSGA"}
+                return [self.search_space.random_point(1)], {"algorithm": "SSGA"}, {}
 
     def __getstate__(self):
         state = self.__dict__.copy()

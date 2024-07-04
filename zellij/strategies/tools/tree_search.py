@@ -5,12 +5,16 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Union, Iterable, TYPE_CHECKING
+from typing import List, Union, Callable, TYPE_CHECKING, Tuple
 from collections import defaultdict
 
 from zellij.core.search_space import BaseFractal
 from zellij.core.errors import InitializationError
-from zellij.strategies.tools.geometry import NMSOSection
+from zellij.strategies.tools.geometry import (
+    NMSOSection,
+    LatinHypercube,
+    LatinHypercubeUCB,
+)
 
 import numpy as np
 from itertools import groupby
@@ -888,8 +892,6 @@ class PotentiallyOptimalRectangle(TreeSearch):
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
         self.best_score = float("inf")
 
     def add(self, c: BaseFractal):
@@ -902,12 +904,24 @@ class PotentiallyOptimalRectangle(TreeSearch):
     def get_next(self) -> List[BaseFractal]:
         gc.collect()
         sel_nodes = []
-        self.maxi1.fill(-float("inf"))
-        self.mini2.fill(float("inf"))
         if len(self.openl) > 1:
             # I3 groups
             groups = groupby(self.openl, lambda x: x.measure)
-            idx = self.optimal(groups)
+            max_groups = []
+            min_groups = []
+            size_groups = []
+            len_groups = []
+            for size, g in groups:
+                lg = list(g)
+                max_groups.append(lg[-1].score)
+                min_groups.append(lg[0].score)
+                size_groups.append(size)
+                len_groups.append(len(lg))
+            max_groups = np.array(max_groups, dtype=float)
+            min_groups = np.array(min_groups, dtype=float)
+            size_groups = np.array(size_groups, dtype=float)
+
+            idx = self.optimal(max_groups, min_groups, size_groups, len_groups)
             if idx:
                 for i in reversed(idx):
                     sel_nodes.append(self.openl.pop(i))
@@ -918,82 +932,65 @@ class PotentiallyOptimalRectangle(TreeSearch):
         return sel_nodes
 
     def optimal(
-        self, groups: Iterable[Tuple[float, Iterable[BaseFractal]]]
+        self,
+        max_groups: np.ndarray,
+        min_groups: np.ndarray,
+        size_groups: np.ndarray,
+        len_groups: list,
     ) -> List[int]:
+
         # see DIRECT Optimization Algorithm User Guide Daniel E. Finkel
         # for explanation
 
         # Potentially optimal index
         potoptidx = []
-
         group_size = 0
-        for _, value in groups:
-            subgroup = list(value)
-            current_score = subgroup[0].score
-            idx = 0
-            selected = subgroup[idx]
-            current_idx = group_size + idx
 
-            is_potopt = False
+        for gidx, (jvalue, jsize, grp_len) in enumerate(
+            zip(min_groups, size_groups, len_groups)
+        ):
+            current_idx = group_size
+            if gidx > 0:
+                max_i1 = np.max(
+                    (jvalue - min_groups[:gidx]) / (jsize - size_groups[:gidx])
+                )
+            else:
+                max_i1 = 0
 
-            for jdx in range(current_idx + len(subgroup), len(self.openl)):
-                c = self.openl[jdx]
-                # I1 group
-                if c.measure < selected.measure:
-                    num = selected.score - c.score
-                    denom = selected.measure - c.measure
-                    if denom != 0:
-                        low_k = num / denom
-                    else:
-                        low_k = -float("inf")
+            gidxpo = gidx + 1
+            if gidxpo < len(size_groups):
+                min_i2 = np.min(
+                    (min_groups[gidxpo:] - jvalue) / (size_groups[gidxpo:] - jsize)
+                )
+            else:
+                min_i2 = float("inf")
 
-                    if low_k > self.maxi1[current_idx]:
-                        self.maxi1[current_idx] = low_k
-                    elif low_k < self.mini2[jdx]:
-                        self.mini2[jdx] = low_k
-                # I2 group
-                elif c.measure > selected.measure:
-                    denom = c.measure - selected.measure
-                    num = c.score - selected.score
-                    if denom != 0:
-                        up_k = (num) / (denom)
-                    else:
-                        up_k = float("inf")
+            if not np.isfinite(min_i2):
+                comp = True
+            elif self.best_score != 0:
+                right = (1 / np.abs(self.best_score)) * (
+                    self.best_score - jvalue + jsize * min_i2
+                )
+                comp = self.error <= right
+            else:
+                right = jsize * min_i2
+                comp = jvalue <= right
 
-                    if up_k < self.mini2[current_idx]:
-                        self.mini2[current_idx] = up_k
-                    elif up_k > self.maxi1[jdx]:
-                        self.maxi1[jdx] = up_k
-
-                if self.mini2[current_idx] > 0 and (
-                    self.maxi1[current_idx] <= self.mini2[current_idx]
+            # Potentially optimal
+            if (max_i1 <= min_i2) and comp:
+                potoptidx.append(current_idx)
+                idx = 1
+                current_idx = group_size + idx
+                while (
+                    idx < grp_len
+                    and np.abs(self.openl[current_idx].score - jvalue) <= self.error
                 ):
-                    if self.best_score != 0:
-                        num = self.best_score - selected.score
-                        denum = np.abs(self.best_score)
-                        scnd_part = selected.measure / denum * self.mini2[current_idx]
-
-                        left = num / denum + scnd_part
-                        if np.isnan(left) or (self.error <= left):
-                            is_potopt = True
-                    else:
-                        scnd_part = selected.measure * self.mini2[current_idx]
-
-                        if selected.score <= scnd_part:
-                            is_potopt = True
-
-                if is_potopt:
                     potoptidx.append(current_idx)
                     idx += 1
-                    while (
-                        idx < len(subgroup)
-                        and np.abs(subgroup[idx].score - current_score) <= 1e-13
-                    ):
-                        current_idx = group_size + idx
-                        potoptidx.append(current_idx)
-                        idx += 1
+                    current_idx = group_size + idx
 
-            group_size += len(subgroup)
+            group_size += grp_len
+        # print(min_groups, len_groups, size_groups, potoptidx)
         return potoptidx
 
 
@@ -1068,8 +1065,6 @@ class LocallyBiasedPOR(TreeSearch):
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
         self.best_score = float("inf")
 
     def add(self, c: BaseFractal):
@@ -1082,108 +1077,102 @@ class LocallyBiasedPOR(TreeSearch):
     def get_next(self) -> List[BaseFractal]:
         gc.collect()
         sel_nodes = []
-        self.maxi1.fill(-float("inf"))
-        self.mini2.fill(float("inf"))
         if len(self.openl) > 1:
             # I3 groups
             groups = groupby(self.openl, lambda x: x.measure)
-            idx = self.optimal(groups)
+            max_groups = []
+            min_groups = []
+            size_groups = []
+            len_groups = []
+            for size, g in groups:
+                lg = list(g)
+                max_groups.append(lg[-1].score)
+                min_groups.append(lg[0].score)
+                size_groups.append(size)
+                len_groups.append(len(lg))
+            max_groups = np.array(max_groups, dtype=float)
+            min_groups = np.array(min_groups, dtype=float)
+            size_groups = np.array(size_groups, dtype=float)
 
+            idx = self.optimal(max_groups, min_groups, size_groups, len_groups)
             if idx:
                 for i in reversed(idx):
                     sel_nodes.append(self.openl.pop(i))
                 self.add_close(sel_nodes)
-
         elif len(self.openl) == 1:
             sel_nodes.append(self.openl.pop(0))
             self.add_close(sel_nodes)
-
         return sel_nodes
 
     def optimal(
-        self, groups: Iterable[Tuple[float, Iterable[BaseFractal]]]
+        self,
+        max_groups: np.ndarray,
+        min_groups: np.ndarray,
+        size_groups: np.ndarray,
+        len_groups: list,
     ) -> List[int]:
+
         # see DIRECT Optimization Algorithm User Guide Daniel E. Finkel
         # for explanation
 
-        # found potopt rectangle at level x
-        found_levels = [False] * self.max_depth
+        sel_levels = [True] * self.max_depth
 
         # Potentially optimal index
         potoptidx = []
-
         group_size = 0
-        for _, value in groups:
-            subgroup = list(value)
-            current_score = subgroup[0].score
-            idx = 0
-            selected = subgroup[idx]
-            current_idx = group_size + idx
 
-            is_potopt = False
+        for gidx, (jvalue, jsize, grp_len) in enumerate(
+            zip(min_groups, size_groups, len_groups)
+        ):
+            current_idx = group_size
+            if gidx > 0:
+                max_i1 = np.max(
+                    (jvalue - min_groups[:gidx]) / (jsize - size_groups[:gidx])
+                )
+            else:
+                max_i1 = 0
 
-            for jdx in range(current_idx + len(subgroup), len(self.openl)):
-                c = self.openl[jdx]
-                # I1 group
-                if c.measure < selected.measure:
-                    num = selected.score - c.score
-                    denom = selected.measure - c.measure
-                    if denom != 0:
-                        low_k = num / denom
-                    else:
-                        low_k = -float("inf")
+            gidxpo = gidx + 1
+            if gidxpo < len(size_groups):
+                min_i2 = np.min(
+                    (min_groups[gidxpo:] - jvalue) / (size_groups[gidxpo:] - jsize)
+                )
+            else:
+                min_i2 = float("inf")
 
-                    if low_k > self.maxi1[current_idx]:
-                        self.maxi1[current_idx] = low_k
-                    elif low_k < self.mini2[jdx]:
-                        self.mini2[jdx] = low_k
-                # I2 group
-                elif c.measure > selected.measure:
-                    denom = c.measure - selected.measure
-                    num = c.score - selected.score
-                    if denom != 0:
-                        up_k = (num) / (denom)
-                    else:
-                        up_k = float("inf")
+            if not np.isfinite(min_i2):
+                comp = True
+            elif self.best_score != 0:
+                right = (1 / np.abs(self.best_score)) * (
+                    self.best_score - jvalue + jsize * min_i2
+                )
+                comp = self.error <= right
+            else:
+                right = jsize * min_i2
+                comp = jvalue <= right
 
-                    if up_k < self.mini2[current_idx]:
-                        self.mini2[current_idx] = up_k
-                    elif up_k > self.maxi1[jdx]:
-                        self.maxi1[jdx] = up_k
-
-            if self.mini2[current_idx] > 0 and (
-                self.maxi1[current_idx] <= self.mini2[current_idx]
+            # Potentially optimal
+            if (
+                (max_i1 <= min_i2)
+                and comp
+                and sel_levels[self.openl[current_idx].level]
             ):
-                if self.best_score != 0:
-                    num = self.best_score - selected.score
-                    denum = np.abs(self.best_score)
-                    scnd_part = selected.measure / denum * self.mini2[current_idx]
-
-                    left = num / denum + scnd_part
-                    if np.isnan(left) or (self.error <= left):
-                        is_potopt = True
-                else:
-                    scnd_part = selected.measure * self.mini2[current_idx]
-
-                    if selected.score <= scnd_part:
-                        is_potopt = True
-
-            if is_potopt and not found_levels[selected.level]:
                 potoptidx.append(current_idx)
-                found_levels[selected.level] = True
-                idx += 1
+                sel_levels[self.openl[current_idx].level] = False
+                idx = 1
+                current_idx = group_size + idx
                 while (
-                    idx < len(subgroup)
-                    and np.abs(subgroup[idx].score - current_score) <= 1e-13
+                    idx < grp_len
+                    and np.abs(self.openl[current_idx].score - jvalue) <= self.error
+                    and sel_levels[self.openl[current_idx].level]
                 ):
-                    current_idx = group_size + idx
-                    selected = subgroup[idx]
-                    if not found_levels[selected.level]:
-                        potoptidx.append(current_idx)
-                        found_levels[selected.level] = True
+                    potoptidx.append(current_idx)
+                    sel_levels[self.openl[current_idx].level] = False
                     idx += 1
+                    current_idx = group_size + idx
 
-            group_size += len(subgroup)
+            group_size += grp_len
+        # print(min_groups, len_groups, size_groups, potoptidx)
         return potoptidx
 
 
@@ -1259,10 +1248,6 @@ class AdaptivePOR(TreeSearch):
         #############
         # VARIABLES #
         #############
-        self.maxi1 = np.full(self.maxopen, -float("inf"), dtype=float)
-        self.mini2 = np.full(self.maxopen, float("inf"), dtype=float)
-
-        self.next_frontier = []
         self.best_score = float("inf")
         self.new_best_score = float("inf")
 
@@ -1270,7 +1255,7 @@ class AdaptivePOR(TreeSearch):
         self.error = self.max_error
 
     def add(self, c: BaseFractal):
-        insort_left(self.openl, c, key=lambda x: (-x.measure, x.score))
+        insort_left(self.openl, c, key=lambda x: (x.measure, x.score))
         if c.score < self.best_score:
             self.best_score = c.score
         if len(self.openl) > self.maxopen:
@@ -1278,7 +1263,7 @@ class AdaptivePOR(TreeSearch):
 
     def get_next(self) -> List[BaseFractal]:
         gc.collect()
-        if np.abs(self.best_score - self.new_best_score) < 1e-4:
+        if np.abs(self.best_score - self.new_best_score) < self.max_error:
             self.best_score = self.new_best_score
             self.new_best_score = float("inf")
             self.stagnation = 0
@@ -1292,11 +1277,24 @@ class AdaptivePOR(TreeSearch):
                 self.error = 0.0
 
         sel_nodes = []
-        self.maxi1.fill(-float("inf"))
-        self.mini2.fill(float("inf"))
+
         if len(self.openl) > 1:
             groups = groupby(self.openl, lambda x: x.measure)
-            idx = self.optimal(groups)
+            max_groups = []
+            min_groups = []
+            size_groups = []
+            len_groups = []
+            for size, g in groups:
+                lg = list(g)
+                max_groups.append(lg[-1].score)
+                min_groups.append(lg[0].score)
+                size_groups.append(size)
+                len_groups.append(len(lg))
+            max_groups = np.array(max_groups, dtype=float)
+            min_groups = np.array(min_groups, dtype=float)
+            size_groups = np.array(size_groups, dtype=float)
+
+            idx = self.optimal(max_groups, min_groups, size_groups, len_groups)
 
             if idx:
                 for i in reversed(idx):
@@ -1310,83 +1308,65 @@ class AdaptivePOR(TreeSearch):
         return sel_nodes
 
     def optimal(
-        self, groups: Iterable[Tuple[float, Iterable[BaseFractal]]]
+        self,
+        max_groups: np.ndarray,
+        min_groups: np.ndarray,
+        size_groups: np.ndarray,
+        len_groups: list,
     ) -> List[int]:
+
         # see DIRECT Optimization Algorithm User Guide Daniel E. Finkel
         # for explanation
 
         # Potentially optimal index
         potoptidx = []
-
         group_size = 0
-        for _, value in groups:
-            subgroup = list(value)
-            current_score = subgroup[0].score
-            idx = 0
-            selected = subgroup[idx]
-            current_idx = group_size + idx
 
-            is_potopt = False
+        for gidx, (jvalue, jsize, grp_len) in enumerate(
+            zip(min_groups, size_groups, len_groups)
+        ):
+            current_idx = group_size
+            if gidx > 0:
+                max_i1 = np.max(
+                    (jvalue - min_groups[:gidx]) / (jsize - size_groups[:gidx])
+                )
+            else:
+                max_i1 = 0
 
-            for jdx in range(current_idx + len(subgroup), len(self.openl)):
-                c = self.openl[jdx]
+            gidxpo = gidx + 1
+            if gidxpo < len(size_groups):
+                min_i2 = np.min(
+                    (min_groups[gidxpo:] - jvalue) / (size_groups[gidxpo:] - jsize)
+                )
+            else:
+                min_i2 = float("inf")
 
-                # I1 group
-                if c.measure < selected.measure:
-                    num = selected.score - c.score
-                    denom = selected.measure - c.measure
-                    if denom != 0:
-                        low_k = num / denom
-                    else:
-                        low_k = -float("inf")
+            if not np.isfinite(min_i2):
+                comp = True
+            elif self.best_score != 0:
+                right = (1 / np.abs(self.best_score)) * (
+                    self.best_score - jvalue + jsize * min_i2
+                )
+                comp = self.error <= right
+            else:
+                right = jsize * min_i2
+                comp = jvalue <= right
 
-                    if low_k > self.maxi1[current_idx]:
-                        self.maxi1[current_idx] = low_k
-                    elif low_k < self.mini2[jdx]:
-                        self.mini2[jdx] = low_k
-                # I2 group
-                elif c.measure > selected.measure:
-                    denom = c.measure - selected.measure
-                    num = c.score - selected.score
-                    if denom != 0:
-                        up_k = (num) / (denom)
-                    else:
-                        up_k = float("inf")
-
-                    if up_k < self.mini2[current_idx]:
-                        self.mini2[current_idx] = up_k
-                    elif up_k > self.maxi1[jdx]:
-                        self.maxi1[jdx] = up_k
-
-            if self.mini2[current_idx] > 0 and (
-                self.maxi1[current_idx] <= self.mini2[current_idx]
-            ):
-                if self.best_score != 0:
-                    num = self.best_score - selected.score
-                    denum = np.abs(self.best_score)
-                    scnd_part = selected.measure / denum * self.mini2[current_idx]
-
-                    left = num / denum + scnd_part
-                    if np.isnan(left) or (self.error <= left):
-                        is_potopt = True
-                else:
-                    scnd_part = selected.measure * self.mini2[current_idx]
-
-                    if selected.score <= scnd_part:
-                        is_potopt = True
-
-            if is_potopt:
+            # Potentially optimal
+            if (max_i1 <= min_i2) and comp:
                 potoptidx.append(current_idx)
-                idx += 1
+                idx = 1
+                current_idx = group_size + idx
                 while (
-                    idx < len(subgroup)
-                    and np.abs(subgroup[idx].score - current_score) <= 1e-13
+                    idx < grp_len
+                    and np.abs(self.openl[current_idx].score - jvalue) <= self.error
                 ):
-                    current_idx = group_size + idx
                     potoptidx.append(current_idx)
                     idx += 1
+                    current_idx = group_size + idx
 
-            group_size += len(subgroup)
+            group_size += grp_len
+        # print(min_groups, len_groups, size_groups, potoptidx)
         return potoptidx
 
 
@@ -1428,7 +1408,6 @@ class SooTreeSearch(TreeSearch):
         openl: Union[BaseFractal, List[BaseFractal]],
         max_depth: int,
         save_close: bool = False,
-        Q: int = 1,
     ):
         """__init__
 
@@ -1440,16 +1419,9 @@ class SooTreeSearch(TreeSearch):
             Maximum depth of the partition tree.
         save_close : boolean, default=True
             If True save expanded, explored and scored fractal within a :code:`close` list.
-        Q : int, default=1
-            Q-DepthFirstSearch, at each get_next, tries to return Q nodes.
 
         """
         super().__init__(openl, max_depth, save_close)
-
-        ##############
-        # PARAMETERS #
-        ##############
-        self.Q = Q
 
     def add(self, c: BaseFractal):
         insort_left(self.openl, c, key=lambda x: (x.level, x.score))
@@ -1457,26 +1429,26 @@ class SooTreeSearch(TreeSearch):
     def get_next(self) -> List[BaseFractal]:
         gc.collect()
         sel_nodes = []
+        node = self.openl.pop(0)
+        sel_nodes.append(node)
+        current_level = node.level
+        vmax = node.score
+
         if len(self.openl) > 0:
-            current_level = self.openl[0].level
-            sel_nodes.append(self.openl.pop(0))
-            vmax = sel_nodes[-1].score
-
             idx = 0
-            size = len(self.openl)
-
+            size_ol = len(self.openl)
             # select the lowest score among all leaves at the current level
-            while idx < size:
-                node = self.openl[idx]
+            while idx < size_ol:
                 # If level change, then select the first node of this level.
                 # (with the lowest score)
-                if node.level != current_level:
-                    current_level = node.level
+                if self.openl[idx].level > current_level:
+                    current_level = self.openl[idx].level
                     if node.score <= vmax:
-                        sel_nodes.append(self.openl.pop(idx))
+                        node = self.openl.pop(idx)
+                        sel_nodes.append(node)
                         vmax = node.score
-                    idx -= 1
-                    size -= 1
+                        idx -= 1
+                        size_ol -= 1
 
                 idx += 1
 
@@ -1698,21 +1670,19 @@ class NMSOTreeSearch(TreeSearch):
             self._newmiddle = None
             self._newright = None
 
-        leaf_at_l = self.openl[self.current_depth].copy()
+        leaf_at_l = len(self.openl[self.current_depth])
 
         update_basket = True
         true_idx = 0
-        while update_basket and len(leaf_at_l) > 0:
-            best_leaf = leaf_at_l[0]
+        while update_basket and true_idx < leaf_at_l:
+            best_leaf = self.openl[self.current_depth][true_idx]
             if best_leaf.visited < self.V:
-                print("BORDEL !!! ")
                 best_leaf.visited += 1
-                leaf_at_l.pop(0)
                 true_idx += 1
             else:
                 update_basket = False
 
-        if len(leaf_at_l) == 0:
+        if true_idx >= leaf_at_l:
             self.current_depth += 1
             return self.get_next()
         else:
@@ -1720,3 +1690,727 @@ class NMSOTreeSearch(TreeSearch):
             self.add_close(sel_node)
             self.current_depth += 1
             return sel_node
+
+
+class TSImprovement(TreeSearch):
+    """TSImprovement
+
+    Breadth First Search algorithm (BFS).
+    Fractal are first sorted by lowest level, then by lowest score.
+
+    Attributes
+    ----------
+    openl : list[BaseFractal]
+        Initial Open list containing not explored nodes from the partition tree.
+    max_depth : int
+        Maximum depth of the partition tree.
+    Q : int, default=1
+        Q-Breadth_first_search, at each get_next, tries to return Q nodes.
+
+    Methods
+    -------
+    add(c)
+        Add a node c to the fractal tree.
+    get_next()
+        Get the next node to evaluate.
+
+    See Also
+    --------
+    Fractal : Abstract class defining what a fractal is.
+    FDA : Fractal Decomposition Algorithm.
+    TreeSearch : Base class.
+    DepthFirstSearch : Tree search Depth based startegy.
+
+    Examples
+    --------
+    >>> from zellij.core.variables import ArrayVar, FloatVar
+    >>> from zellij.strategies.tools import Hypercube, BreadthFirstSearch
+
+    >>> a = ArrayVar(FloatVar("f1", 0, 1), FloatVar("i2", 0, 1))
+    >>> sp = Hypercube(a)
+    >>> ts = BreadthFirstSearch(sp, 3)
+    >>> children = sp.create_children()
+    >>> for idx, c in enumerate(children):
+    ...     c.score = idx
+    ...     ts.add(c)
+    >>> print(ts.openl)
+    [Hypercube(0,-1,0)]
+    >>> new = ts.get_next()
+    >>> print(new)
+    [Hypercube(0,-1,0)]
+    >>> print(ts.openl)
+    [Hypercube(1,0,0), Hypercube(1,0,1), Hypercube(1,0,2), Hypercube(1,0,3)]
+    >>> print(ts.close)
+    [Hypercube(0,-1,0)]
+    """
+
+    def __init__(
+        self,
+        openl: Union[BaseFractal, List[BaseFractal]],
+        max_depth: int,
+        sp: BaseFractal,
+        save_close: bool = False,
+        Q: int = 1,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        openl : {LatinHypercube, list[LatinHypercube]}
+            Initial Open list containing not explored nodes from the partition tree.
+        max_depth : int
+            Maximum depth of the partition tree.
+        sp: LatinHypercube
+            Initial search space.
+        save_close : boolean, default=True
+            If True save expanded, explored and scored fractal within a :code:`close` list.
+        Q : int, default=1
+            Q-Breadth_first_search, at each get_next, tries to return Q nodes.
+        """
+
+        super().__init__(openl, max_depth, save_close)
+        self.sp = sp
+        self.bad = []
+        self.max_leaves = []
+
+        ##############
+        # PARAMETERS #
+        ##############
+
+        self.Q = Q
+        self.improvements = 0
+
+        self.best_levels = np.full(self.max_depth + 1, float("inf"))
+        self.next_bests = self.best_levels.copy()
+        self.best_fractal = None
+
+    def add(self, c: LatinHypercube):
+        print(
+            c.score,
+            c.best_loss,
+            c.length,
+            c.level,
+            1 / (5**c.level),
+            c.lower + (c.upper - c.lower) / 2,
+            c.descending,
+            c.ascending_it,
+        )
+        if c.best_loss < self.best_levels[c.level]:
+            if c.level < self.max_depth:
+                c.descending = True
+                insort_left(self.openl, c, key=lambda x: x.score)
+            else:
+                c.descending = False
+                insort_left(self.bad, c, key=lambda x: x.best_loss)
+
+            if c.best_loss < self.next_bests[c.level]:
+                self.next_bests[c.level] = c.best_loss
+
+    def add_bad(self, c: LatinHypercube):
+        if c.level <= self.max_depth and c.best_loss <= self.best_levels[c.level]:
+            c.descending = False
+            insort_left(self.bad, c, key=lambda x: x.best_loss)
+            if c.best_loss < self.next_bests[c.level]:
+                self.next_bests[c.level] = c.best_loss
+
+    def get_next(self) -> List[BaseFractal]:
+        # print("LENGTH ", len(self.openl), len(self.bad), "\n")
+        self.best_levels = self.next_bests.copy()
+        print(self.best_levels)
+        if len(self.openl) > 0:
+            sel_nodes = self.openl[: self.Q]
+            self.openl = self.openl[self.Q :]
+        elif len(self.bad) > 0:
+            print(
+                f"RETURNING BAD {[(b.best_loss, b.length, b.lower) for b in self.bad]}"
+            )
+            sel_nodes = self.bad[: self.Q]
+            self.bad = self.bad[self.Q :]
+        else:
+            print("RESTART")
+            sel_nodes = [self.sp]
+
+        self.add_close(sel_nodes)
+        return sel_nodes
+
+
+class DoubleUCB(TreeSearch):
+    """DoubleUCB
+
+    Attributes
+    ----------
+    openl : list[BaseFractal]
+        Initial Open list containing not explored nodes from the partition tree.
+    max_depth : int
+        Maximum depth of the partition tree.
+
+    Methods
+    -------
+    add(c)
+        Add a node c to the fractal tree.
+    get_next()
+        Get the next node to evaluate.
+
+    See Also
+    --------
+    Fractal : Abstract class defining what a fractal is.
+    FDA : Fractal Decomposition Algorithm.
+    TreeSearch : Base class.
+    DepthFirstSearch : Tree search Depth based startegy.
+    """
+
+    def __init__(
+        self,
+        openl: BaseFractal,
+        max_depth: int,
+        save_close: bool = False,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        openl : {LatinHypercube, list[LatinHypercube]}
+            Initial Open list containing not explored nodes from the partition tree.
+        max_depth : int
+            Maximum depth of the partition tree.
+        sp: LatinHypercube
+            Initial search space.
+        save_close : boolean, default=True
+            If True save expanded, explored and scored fractal within a :code:`close` list.
+        """
+
+        super().__init__(openl, max_depth, save_close)
+
+        ##############
+        # PARAMETERS #
+        ##############
+        self.size = self.openl[0].size
+        self.last_gs = self.openl[0].grid_size(self.max_depth)
+
+        self.layers = [[] for _ in range(self.max_depth)]
+        self.layers_avg = [[] for _ in range(self.max_depth)]
+        self.layers_var = [[] for _ in range(self.max_depth)]
+        self.layers_vis = [[] for _ in range(self.max_depth)]
+
+        self.levels_weights = np.ones(self.max_depth)
+        self.levels_range = np.arange(1, self.max_depth + 1)
+        self.tin = np.zeros(self.max_depth, dtype=int)
+        self.tin[-1] = self.last_gs * (self.max_depth - 1)
+
+        self.initialized = False
+        self.current_level = 0
+
+    def add(self, c: LatinHypercubeUCB):
+
+        self.layers[c.level].append(c)
+        self.layers_avg[c.level].append(c.mean)
+        self.layers_var[c.level].append(c.var)
+        self.layers_vis[c.level].append(c.visits)
+        if c.level > self.current_level:
+            self.current_level = c.level
+            self.levels_weights[c.level] = c.length
+
+    def add_father(self, c: LatinHypercubeUCB):
+        self.layers[c.level].append(c)
+        self.layers_avg[c.level].append(c.mean)
+        self.layers_var[c.level].append(c.var)
+        self.layers_vis[c.level].append(c.visits)
+        self.tin[c.level] += c.grid_size(c.level) * c.ndist(c.level)
+
+    def _level_proba(self, crlevel):
+        pp = 6
+
+        if np.min(self.tin) >= 500:
+            self.tin = self.tin // 500
+            self.tin[-1] += self.last_gs * (self.max_depth - 1)
+        print(f"TIN : {self.tin}")
+        wp = self.levels_weights[:crlevel] / (1 + self.tin[:crlevel]) ** pp
+        nb_g = self.layers[0][0].grid_size(0) ** self.size
+        col = (1 - 1 / nb_g) ** self.tin[0]
+        if col < 0.99:
+            wp[0] *= col
+        if self.current_level + 1 == self.max_depth:
+            wp[-1] *= len(self.layers[-1]) > 0
+        wp[wp < 0] = 0
+        wp /= wp.sum()
+        return wp
+
+    def get_next(self, n: int) -> Tuple[List[BaseFractal], int, float, float]:
+        p = 4
+        # print(
+        #     "TIN",
+        #     self.tin,
+        #     self.current_level,
+        #     [len(l) for l in self.layers],
+        #     self.levels_weights,
+        # )
+        if self.initialized:
+            crlevel = self.current_level + 1
+            proba = self._level_proba(crlevel)
+
+            # print("PROBA: ", proba)
+            minlevel = np.random.choice(self.levels_range[:crlevel], p=proba) - 1
+            if minlevel > 0:
+                # print(f"MINLEVEL : {minlevel}")
+                avgfrac = np.array(self.layers_avg[minlevel])
+                varfrac = np.array(self.layers_var[minlevel])
+                visfrac = np.array(self.layers_vis[minlevel])
+
+                logvis = 2 * (np.log(4) + p * np.log(n)) / visfrac
+                var = np.sqrt(varfrac * logvis) + (8 / 3) * logvis
+                mask = varfrac == 0
+                var[mask] = 0
+                ucbfrac = -(avgfrac + self.layers[minlevel][0].length * var)
+                minsort = np.argsort(ucbfrac)
+
+                nb_g = self.layers[minlevel][0].grid_size(minlevel) ** self.size
+                idx = 0
+                maxidx = len(minsort) - 1
+                while (
+                    np.random.random()
+                    > (1 - 1 / nb_g) ** self.layers_vis[minlevel][minsort[idx]]
+                ) and idx < maxidx:
+                    idx += 1
+
+                minfrac = minsort[idx]
+                sel_node = self.layers[minlevel].pop(minfrac)
+                self.layers_avg[minlevel].pop(minfrac)
+                self.layers_var[minlevel].pop(minfrac)
+                self.layers_vis[minlevel].pop(minfrac)
+                return [sel_node], minlevel, proba[minlevel], ucbfrac[minfrac]
+            else:
+                sel_node = self.layers[minlevel].pop(0)
+                self.layers_avg[minlevel].pop(0)
+                self.layers_var[minlevel].pop(0)
+                self.layers_vis[minlevel].pop(0)
+                return [sel_node], 0, proba[minlevel], 1
+
+        else:
+            sel_node = self.openl[0]
+            self.openl = []
+            self.initialized = True
+            return [sel_node], 0, float("inf"), float("inf")
+
+
+# class SimpleUCB(TreeSearch):
+#     """SimpleUCB
+
+#     Attributes
+#     ----------
+#     openl : list[BaseFractal]
+#         Initial Open list containing not explored nodes from the partition tree.
+#     max_depth : int
+#         Maximum depth of the partition tree.
+
+#     Methods
+#     -------
+#     add(c)
+#         Add a node c to the fractal tree.
+#     get_next()
+#         Get the next node to evaluate.
+
+#     See Also
+#     --------
+#     Fractal : Abstract class defining what a fractal is.
+#     FDA : Fractal Decomposition Algorithm.
+#     TreeSearch : Base class.
+#     DepthFirstSearch : Tree search Depth based startegy.
+#     """
+
+#     def __init__(
+#         self,
+#         openl: BaseFractal,
+#         max_depth: int,
+#         save_close: bool = False,
+#     ):
+#         """__init__
+
+#         Parameters
+#         ----------
+#         openl : {LatinHypercube, list[LatinHypercube]}
+#             Initial Open list containing not explored nodes from the partition tree.
+#         max_depth : int
+#             Maximum depth of the partition tree.
+#         sp: LatinHypercube
+#             Initial search space.
+#         save_close : boolean, default=True
+#             If True save expanded, explored and scored fractal within a :code:`close` list.
+#         """
+
+#         super().__init__(openl, max_depth, save_close)
+
+#         ##############
+#         # PARAMETERS #
+#         ##############
+#         self.size = self.openl[0].size
+
+#         self.layers = [[] for _ in range(self.max_depth)]
+#         self.layers[0].append(self.openl[0])
+#         self.openl = []
+
+#         self.layers_avg = [[] for _ in range(self.max_depth)]
+#         self.layers_var = [[] for _ in range(self.max_depth)]
+
+#         self.levels_weights = np.ones(self.max_depth, dtype=float)
+#         self.grid_sizes = np.zeros(self.max_depth, dtype=int)
+
+#         self.levels_bests = np.full(self.max_depth, float("inf"), dtype=float)
+#         self.levels_range = np.arange(1, self.max_depth + 1, dtype=int)
+#         self.levels_sizes = np.zeros(self.max_depth, dtype=int)
+#         self.levels_sizes[0] = 1
+#         self.tin = np.ones(self.max_depth, dtype=int)
+
+#         self.initialized = False
+#         self.current_level = 0
+
+#     def add(self, c: LatinHypercubeUCB):
+
+#         self.layers[c.level].append(c)
+#         self.layers_avg[c.level].append(c.mean)
+#         self.layers_var[c.level].append(c.mean)
+
+#         self.levels_sizes[c.level] += 1
+#         if c.descending:
+#             self.tin[c.level - 1] += 1
+#         else:
+#             self.tin[c.level] += 1
+
+#         if c.best_loss < self.levels_bests[c.level]:
+#             self.levels_bests[c.level] = c.best_loss
+
+#         if c.level > self.current_level:
+#             self.current_level = c.level
+#             self.levels_weights[c.level] = c.length
+#             self.grid_sizes[c.level] = c.grid_size(c.level)
+
+#     def _level_proba(self, crlevel):
+#         pp = 6
+#         wp = np.flip(self.levels_range[:crlevel]) / (
+#             1 + pp * np.log(self.tin[:crlevel])
+#         )
+
+#         # if np.min(self.tin) >= 200:
+#         #     self.tin = self.tin // 200
+#         #     self.tin *= self.grid_sizes
+
+#         # wp = self.levels_weights[:crlevel] / (1 + self.tin[:crlevel]) ** pp
+#         wp *= self.levels_sizes[:crlevel] > 0
+#         wp /= wp.sum()
+#         # print(self.tin[:crlevel], np.log(self.tin[:crlevel]))
+#         return wp
+
+#     def get_next(self, n: int) -> Tuple[List[BaseFractal], int, float, float]:
+#         if self.initialized:
+#             crlevel = self.current_level + 1
+#             proba = self._level_proba(crlevel)
+#             # print("PROBA: ", proba, self.levels_sizes)
+#             minlevel = np.random.choice(self.levels_range[:crlevel], p=proba) - 1
+#             if minlevel > 0:
+#                 # print(f"MINLEVEL : {minlevel}")
+#                 avgfrac = np.array(self.layers_avg[minlevel])
+#                 var = np.array(self.layers_var[minlevel])
+
+#                 ucb = avgfrac - self.levels_weights[minlevel] * var
+
+#                 mask = ucb > self.levels_bests[minlevel]
+#                 ucb[mask] = avgfrac[mask] + self.levels_weights[minlevel] * var[mask]
+#                 minfrac = np.argmin(ucb)
+
+#                 sel_node = self.layers[minlevel].pop(minfrac)
+#                 self.layers_avg[minlevel].pop(minfrac)
+#                 self.layers_var[minlevel].pop(minfrac)
+#                 self.levels_sizes[minlevel] -= 1
+
+#                 if minlevel == self.max_depth - 1:
+#                     sel_node.descending = False
+
+#                 return [sel_node], minlevel, proba[minlevel], ucb[minfrac]
+#             else:
+#                 return self.layers[minlevel], 0, proba[minlevel], 1
+
+#         else:
+#             self.initialized = True
+#             return self.layers[0], 0, float("inf"), float("inf")
+
+
+class SimpleUCB(TreeSearch):
+    """SimpleUCB
+
+    Attributes
+    ----------
+    openl : list[BaseFractal]
+        Initial Open list containing not explored nodes from the partition tree.
+    max_depth : int
+        Maximum depth of the partition tree.
+
+    Methods
+    -------
+    add(c)
+        Add a node c to the fractal tree.
+    get_next()
+        Get the next node to evaluate.
+
+    See Also
+    --------
+    Fractal : Abstract class defining what a fractal is.
+    FDA : Fractal Decomposition Algorithm.
+    TreeSearch : Base class.
+    DepthFirstSearch : Tree search Depth based startegy.
+    """
+
+    def __init__(
+        self,
+        openl: BaseFractal,
+        max_depth: int,
+        save_close: bool = False,
+        pp: float = 1.0,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        openl : {LatinHypercube, list[LatinHypercube]}
+            Initial Open list containing not explored nodes from the partition tree.
+        max_depth : int
+            Maximum depth of the partition tree.
+        sp: LatinHypercube
+            Initial search space.
+        save_close : boolean, default=True
+            If True save expanded, explored and scored fractal within a :code:`close` list.
+        """
+
+        super().__init__(openl, max_depth, save_close)
+
+        ##############
+        # PARAMETERS #
+        ##############
+        self.size = self.openl[0].size
+
+        self.layers = [[] for _ in range(self.max_depth)]
+        self.layers[0].append(self.openl[0])
+        self.openl = []
+
+        self.layers_avg = [[] for _ in range(self.max_depth)]
+        self.layers_var = [[] for _ in range(self.max_depth)]
+
+        self.levels_weights = np.ones(self.max_depth, dtype=float)
+        self.grid_sizes = np.zeros(self.max_depth, dtype=int)
+
+        self.levels_bests = np.full(self.max_depth, float("inf"), dtype=float)
+        self.levels_range = np.arange(1, self.max_depth + 1, dtype=int)
+        self.levels_sizes = np.zeros(self.max_depth, dtype=int)
+        self.levels_sizes[0] = 1
+        self.tin = np.ones(self.max_depth, dtype=int)
+
+        self.initialized = False
+        self.current_level = 0
+        self.pp = pp
+
+    def add(self, c: LatinHypercubeUCB):
+
+        self.layers[c.level].append(c)
+        self.layers_avg[c.level].append(c.mean)
+        self.layers_var[c.level].append(c.mean)
+
+        self.levels_sizes[c.level] += 1
+        if c.descending:
+            self.tin[c.level - 1] += 1
+        else:
+            self.tin[c.level] += 1
+
+        if c.best_loss < self.levels_bests[c.level]:
+            self.levels_bests[c.level] = c.best_loss
+
+        if c.level > self.current_level:
+            self.current_level = c.level
+            self.levels_weights[c.level] = c.length
+            self.grid_sizes[c.level] = c.grid_size(c.level)
+
+    def _level_proba(self, crlevel):
+        wp = np.flip(self.levels_range[:crlevel]) / (
+            1 + self.pp * np.log(self.tin[:crlevel])
+        )
+
+        # if np.min(self.tin) >= 200:
+        #     self.tin = self.tin // 200
+        #     self.tin *= self.grid_sizes
+
+        # wp = self.levels_weights[:crlevel] / (1 + self.tin[:crlevel]) ** pp
+        wp *= self.levels_sizes[:crlevel] > 0
+        wp /= wp.sum()
+        # print(self.tin[:crlevel], np.log(self.tin[:crlevel]))
+        return wp
+
+    def get_next(self, n: int) -> Tuple[List[BaseFractal], int, float, float]:
+        if self.initialized:
+            crlevel = self.current_level + 1
+            proba = self._level_proba(crlevel)
+            # print("PROBA: ", proba, self.levels_sizes)
+            minlevel = np.random.choice(self.levels_range[:crlevel], p=proba) - 1
+            if minlevel > 0:
+                # print(f"MINLEVEL : {minlevel}")
+                avgfrac = np.array(self.layers_avg[minlevel])
+                var = np.array(self.layers_var[minlevel])
+
+                ucb = avgfrac - self.levels_weights[minlevel] * var
+
+                mask = ucb > self.levels_bests[minlevel]
+                ucb[mask] = avgfrac[mask] + self.levels_weights[minlevel] * var[mask]
+                minfrac = np.argmin(ucb)
+
+                sel_node = self.layers[minlevel].pop(minfrac)
+                self.layers_avg[minlevel].pop(minfrac)
+                self.layers_var[minlevel].pop(minfrac)
+                self.levels_sizes[minlevel] -= 1
+
+                if minlevel == self.max_depth - 1:
+                    sel_node.descending = False
+
+                return [sel_node], minlevel, proba[minlevel], ucb[minfrac]
+            else:
+                return self.layers[minlevel], 0, proba[minlevel], 1
+
+        else:
+            self.initialized = True
+            return self.layers[0], 0, float("inf"), float("inf")
+
+
+class BaMSOOUCB(TreeSearch):
+    """BaMSOOUCB
+
+    Attributes
+    ----------
+    openl : list[BaseFractal]
+        Initial Open list containing not explored nodes from the partition tree.
+    max_depth : int
+        Maximum depth of the partition tree.
+
+    Methods
+    -------
+    add(c)
+        Add a node c to the fractal tree.
+    get_next()
+        Get the next node to evaluate.
+
+    See Also
+    --------
+    Fractal : Abstract class defining what a fractal is.
+    FDA : Fractal Decomposition Algorithm.
+    TreeSearch : Base class.
+    DepthFirstSearch : Tree search Depth based startegy.
+    """
+
+    def __init__(
+        self,
+        openl: BaseFractal,
+        max_depth: int,
+        nu: float,
+        save_close: bool = False,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        openl : {LatinHypercube, list[LatinHypercube]}
+            Initial Open list containing not explored nodes from the partition tree.
+        max_depth : int
+            Maximum depth of the partition tree.
+        sp: LatinHypercube
+            Initial search space.
+        save_close : boolean, default=True
+            If True save expanded, explored and scored fractal within a :code:`close` list.
+        """
+
+        super().__init__(openl, max_depth, save_close)
+
+        ##############
+        # PARAMETERS #
+        ##############
+        self.size = self.openl[0].size
+
+        self.nu = nu
+
+        maxd = self.max_depth
+        self.layers = [[] for _ in range(maxd)]
+        self.layers[0].append(self.openl[0])
+        self.openl = []
+
+        self.layers_avg = [[] for _ in range(maxd)]
+        self.layers_var = [[] for _ in range(maxd)]
+        self.layers_scr = [[] for _ in range(maxd)]
+
+        self.levels_weights = np.ones(maxd, dtype=float)
+
+        self.levels_bests = np.full(maxd, float("inf"), dtype=float)
+        self.levels_bf = [None for _ in range(maxd)]
+        self.best_score = float("inf")
+        self.best_f = self.layers[0][0]
+
+        self.initialized = False
+        self.current_level = 0
+        self.N = 1
+        self.improvement = False
+        self.counter = 5
+
+    def add(self, c: LatinHypercubeUCB):
+
+        self.N += len(c.losses)
+
+        self.layers[c.level].append(c)
+        self.layers_avg[c.level].append(c.mean)
+        self.layers_var[c.level].append(c.var)
+        self.layers_scr[c.level].append(c.best_loss)
+
+        if c.level > self.current_level:
+            self.current_level = c.level
+            self.levels_weights[c.level] = c.length
+
+    def get_next(self) -> List[BaseFractal]:
+        self.improvement = False
+        beta = np.sqrt(2 * np.log(np.pi**2 * self.N**2 / (6 * self.nu)))
+        crlevel = self.current_level + 1
+        vmax = float("inf")
+
+        sel_node = [self.layers[0][0]]
+
+        for l in range(1, crlevel):
+            if len(self.layers[l]) > 0:
+                mean = np.array(self.layers_avg[l], dtype=float)
+                var = np.array(self.layers_var[l], dtype=float)
+                scr = np.array(self.layers_scr[l], dtype=float)
+
+                ucb = mean - beta * var
+
+                mask = ucb > self.levels_bests[l]
+                ucb[mask] = mean[mask] + beta * var[mask]
+                ucb[~mask] = scr[~mask]
+
+                minidx = np.argmin(ucb)
+                gscore = ucb[minidx]
+
+                sf = self.layers[l][minidx]
+
+                if gscore < vmax:
+                    sf = self.layers[l].pop(minidx)
+                    sel_node.append(sf)
+                    self.layers_avg[l].pop(minidx)
+                    self.layers_var[l].pop(minidx)
+                    vmax = gscore
+
+                if sf.best_loss < self.levels_bests[l]:
+                    self.levels_bests[l] = sf.best_loss
+                    self.levels_bf[l] = sf
+                    self.improvement = True
+                    self.counter = 0
+                    if sf.best_loss < self.best_score:
+                        self.best_score = sf.best_loss
+                        self.best_f = sf
+
+        if self.improvement:
+            return sel_node
+        else:
+            self.counter += 1
+            if self.counter == 5:
+                return [self.best_f]
+            else:
+                return sel_node

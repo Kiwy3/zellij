@@ -49,8 +49,6 @@ class LossFunc(ABC):
         It can also be of mixed types, containing, strings, float, int...
     objective : Objective
         An :code:`Objective` object determines what the optimization problem is.
-    secondary : list[Objective], default=None,
-        Secondary objectives for Multi-objective optimization.
     constraint : list[str], default=None
         List of keys linked to :ref:`lf` outputs.
         Constraints are modeled by inequation. The constraint is met if the value is
@@ -70,7 +68,7 @@ class LossFunc(ABC):
     kwargs_mode : bool, default=False
         If True, then solutions are passed as kwargs to :ref:`lf`. Keys, are
         the names of the :ref:`var` within the :ref:`sp`.
-    best_score : float
+    best_score : np.ndarray
         Best score found so far.
     best_point : list
         Best solution found so far.
@@ -87,8 +85,7 @@ class LossFunc(ABC):
     def __init__(
         self,
         model: Callable[..., dict],
-        objective: Objective,
-        secondary: Optional[List[Objective]] = None,
+        objective: List[Objective],
         constraint: Optional[list[str]] = None,
         record_time: bool = False,
         only_score: bool = False,
@@ -109,8 +106,6 @@ class LossFunc(ABC):
             It can also be of mixed types, containing, strings, float, int...
         objective : Objective
             An :code:`Objective` object determines what the optimization problem is.
-        secondary : list[Objective], default=None,
-            Secondary objectives for Multi-objective optimization.
         constraint : list[str], default=None
             List of keys linked to :ref:`lf` outputs.
             Constraints are modeled by inequation. The constraint is met if the value is
@@ -137,7 +132,6 @@ class LossFunc(ABC):
         self.model = model
 
         self.objective = objective
-        self.secondary = secondary
         self.constraint = constraint
 
         self.save = None
@@ -152,9 +146,7 @@ class LossFunc(ABC):
         #############
 
         self.info = None
-
-        self.best_score = float("inf")
-        self.best_point = None
+        self.xinfo = None
 
         self.calls = 0
 
@@ -171,18 +163,19 @@ class LossFunc(ABC):
         self._init_time = time.time()
 
     @property
-    def secondary(self) -> Optional[List[Objective]]:
-        return self._secondary
+    def objective(self) -> List[Objective]:
+        return self._objective
 
-    @secondary.setter
-    def secondary(self, value: Optional[List[Objective]]):
-        self._secondary = value
-        if value:
-            self.best_sec_score = np.array([float("inf")] * len(value), dtype=float)
-            self.best_sec_point = [None] * len(value)
+    @objective.setter
+    def objective(self, value: List[Objective]):
+        self._objective = value
+        if isinstance(value, list) and len(value) > 0:
+            self.best_score = np.array([float("inf")] * len(value), dtype=float)
+            self.best_point = [None] * len(value)
         else:
-            self.best_sec_score = None
-            self.best_sec_point = None
+            raise InputError(
+                f"Objective must be a list containing objectives, got {value} "
+            )
 
     @property
     def constraint(self) -> Optional[List[str]]:
@@ -192,14 +185,11 @@ class LossFunc(ABC):
     def constraint(self, value: Optional[List[str]]):
         self._constraint = value
         if value:
-            self.best_constraint = np.array([float("inf")] * len(value), dtype=float)
-            if self.secondary:
-                self.best_sec_constraint = np.array(
-                    [[float("inf")] * len(value)] * len(self.secondary), dtype=float
-                )
+            self.best_constraint = np.array(
+                [[float("inf")] * len(value)] * len(self.objective), dtype=float
+            )
         else:
-            self.best_constraint = None
-            self.best_sec_constraint = None
+            self.best_constraint = [None] * len(self.objective)
 
     @property
     def info(self) -> Optional[List[str]]:
@@ -209,14 +199,25 @@ class LossFunc(ABC):
     def info(self, value: Optional[List[str]]):
         self._info = value
         if value:
-            self.best_info = np.array([float("inf")] * len(value), dtype=float)
-            if self.secondary:
-                self.best_sec_info = np.array(
-                    [[float("inf")] * len(value)] * len(self.secondary), dtype=float
-                )
+            self.best_info = np.array(
+                [[float("inf")] * len(value)] * len(self.objective), dtype=float
+            )
         else:
-            self.best_info = None
-            self.best_sec_info = None
+            self.best_info = [None] * len(self.objective)
+
+    @property
+    def xinfo(self) -> Optional[List[str]]:
+        return self._xinfo
+
+    @xinfo.setter
+    def xinfo(self, value: Optional[List[str]]):
+        self._xinfo = value
+        if value:
+            self.best_xinfo = np.array(
+                [[float("inf")] * len(value)] * len(self.objective), dtype=float
+            )
+        else:
+            self.best_xinfo = [None] * len(self.objective)
 
     @property
     def save(self) -> bool:
@@ -254,7 +255,13 @@ class LossFunc(ABC):
         pass
 
     @abstractmethod
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: Optional[dict] = None,
+        xinfo: Optional[dict] = None,
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
@@ -269,24 +276,25 @@ class LossFunc(ABC):
             if self.default:
                 new_kwargs.update(self.default)
 
-            start = time.time()
-            start_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+            if self.record_time:
+                start = time.time()
+                start_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 
             # compute loss
             res, trained_model = self._build_return(self.model(**new_kwargs))  # type: ignore
 
-            end = time.time()
-            end_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
-
             if self.record_time:
+                end = time.time()
+                end_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
                 res["eval_time"] = end - start
                 res["start_time"] = start - self._init_time
                 res["end_time"] = end - self._init_time
                 res["start_date"] = start_date
                 res["end_date"] = end_date
         else:
-            start = time.time()
-            start_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+            if self.record_time:
+                start = time.time()
+                start_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 
             if self.default:
                 lossv = self.model(point, **self.default)
@@ -294,10 +302,10 @@ class LossFunc(ABC):
                 lossv = self.model(point)
 
             res, trained_model = self._build_return(lossv)
-            end = time.time()
-            end_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 
             if self.record_time:
+                end = time.time()
+                end_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
                 res["eval_time"] = end - start
                 res["start_time"] = start - self._init_time
                 res["end_time"] = end - self._init_time
@@ -364,11 +372,9 @@ class LossFunc(ABC):
 
         # Additionnal header for the outputs file
         if self.only_score:
-            suffix = "objective0"
-            if self.secondary:
-                suffix += "," + ",".join(
-                    str(f"objective{idx}") for idx in range(1, len(self.secondary) + 1)
-                )
+            suffix = ",".join(
+                str(f"objective{idx}") for idx in range(0, len(self.objective))
+            )
             if self.constraint:
                 suffix += "," + ",".join(str(f"{con}") for con in self.constraint)
         else:
@@ -423,12 +429,10 @@ class LossFunc(ABC):
         # Save a solution and additionnal contents
         with open(self.loss_file, "a+") as f:
             if self.only_score:
-                header = f"{kwargs['objective0']}"
-                if self.secondary:
-                    header += "," + ",".join(
-                        str(kwargs[f"objective{idx}"])
-                        for idx in range(1, len(self.secondary) + 1)
-                    )
+                header = ",".join(
+                    str(kwargs[f"objective{idx}"])
+                    for idx in range(0, len(self.objective))
+                )
                 if self.constraint:
                     header += "," + ",".join(
                         str(kwargs[f"{con}"]) for con in self.constraint
@@ -438,38 +442,14 @@ class LossFunc(ABC):
             else:
                 f.write(",".join(str(e) for e in x) + "," + suffix + "\n")
 
-    def _check_secondary(
-        self,
-        x: list,
-        secondary: np.ndarray,
-        constraint: Optional[np.ndarray] = None,
-        info: Optional[np.ndarray] = None,
-        csummed: Optional[float] = None,  # sum of constraints c_i < 0
-        bsummed: Optional[float] = None,  # best sum of constraint c_i < 0
-    ):
-        for i, y in enumerate(secondary):
-            sc_bool = y < self.best_sec_score[i]  # type: ignore
-            if csummed:
-                if csummed < bsummed and sc_bool:  # type: ignore
-                    self.best_sec_constraint[i] = constraint  # type: ignore
-                    self.best_sec_score[i] = y  # type: ignore
-                    self.best_sec_point[i] = list(x)[:]  # type: ignore
-                    if info:
-                        self.best_sec_info[i] = info  # type: ignore
-            elif sc_bool:
-                self.best_sec_score[i] = y  # type: ignore
-                self.best_sec_point[i] = list(x)[:]  # type: ignore
-                if info:
-                    self.best_sec_info[i] = info  # type: ignore
-
     # Save best found solution
     def _save_best(
         self,
         x: list,
-        y: float,
-        secondary: Optional[np.ndarray] = None,
+        y: np.ndarray,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
     ):
         """_save_best
 
@@ -479,54 +459,47 @@ class LossFunc(ABC):
         ----------
         x : list
             Set of hyperparameters (a solution)
-        y : {float, int}
-            Loss value (score) associated to x.
-        secondary : np.ndarray, optional
-            Secondary objectives.
+        y : np.ndarray(float)
+            Objective values associated to x.
         constraint : np.ndarray, optional
             Constraints values.
         info : np.ndarray, optional
             Info values.
         """
 
-        sc_bool = y < self.best_score
         if self.constraint:
             if constraint is None:
                 raise InputError(
                     f"In LossFunc, constraints values are expected. Got {constraint} "
                 )
+            elif (constraint <= 0).all():
+                summed = -float("inf")
             else:
-                if (constraint <= 0).all():
-                    summed = -float("inf")
-                    bsummed = float("inf")
+                summed = constraint.clip(min=0).sum()
+
+        for i in range(len(self.objective)):
+            sc_bool = y[i] < self.best_score[i]
+            if self.constraint:
+                if np.isfinite(summed):
+                    bsummed = np.sum(self.best_constraint[i].clip(min=0))  # type: ignore
+                    if summed < bsummed and sc_bool:
+                        self.best_score[i] = y[i]
+                        self.best_point[i] = list(x)[:]  # type: ignore
+                        self.best_constraint[i] = constraint  # type: ignore
+                        self.best_info[i] = info  # type: ignore
+                        self.best_xinfo[i] = xinfo  # type: ignore
                 else:
-                    summed = constraint.clip(min=0).sum()
-                    bsummed = np.sum(self.best_constraint.clip(min=0))  # type: ignore
-                if summed < bsummed and sc_bool:
-                    self.best_constraint = constraint
-                    self.best_score = y
-                    self.best_point = list(x)[:]
-                    self.best_info = info
-                    if self.secondary:
-                        if secondary is None:
-                            raise InputError(
-                                f"In LossFunc, secondary values are expected. Got {secondary} "
-                            )
-                        else:
-                            self._check_secondary(
-                                x, secondary, constraint, info, summed, bsummed
-                            )
-        elif sc_bool:
-            self.best_score = y
-            self.best_point = list(x)[:]
-            self.best_info = info
-            if self.secondary:
-                if secondary is None:
-                    raise InputError(
-                        f"In LossFunc, secondary values are expected. Got {secondary} "
-                    )
-                else:
-                    self._check_secondary(x, secondary, info=info)
+                    self.best_score[i] = y[i]
+                    self.best_point[i] = list(x)[:]  # type: ignore
+                    self.best_constraint[i] = constraint  # type: ignore
+                    self.best_info[i] = info  # type: ignore
+                    self.best_xinfo[i] = xinfo  # type: ignore
+
+            elif sc_bool:
+                self.best_score[i] = y[i]
+                self.best_point[i] = list(x)[:]  # type: ignore
+                self.best_info[i] = info  # type: ignore
+                self.best_xinfo[i] = xinfo  # type: ignore
 
         self.calls += 1
 
@@ -554,13 +527,9 @@ class LossFunc(ABC):
             save_mth = getattr(model, "save", None)
             if not callable(save_mth):
                 raise ModelError("Returned model does not have a save method.")
-
         outputs = r
-        outputs = self.objective(outputs)
-        # compute secondary outputs
-        if self.secondary:
-            for idx, sec_obj in enumerate(self.secondary):
-                outputs = sec_obj(outputs, num=idx + 1)
+        for idx, obj in enumerate(self.objective):
+            outputs = obj(outputs, num=idx)
 
         return outputs, model
 
@@ -569,10 +538,6 @@ class LossFunc(ABC):
 
         Reset all attributes of :code:`LossFunc` at their initial values.
         """
-
-        self.best_score = float("inf")
-        self.best_point = None
-        self.best_argmin = None
 
         self.secondary = self.secondary
         self.constraint = self.constraint
@@ -606,8 +571,7 @@ class SequentialLoss(LossFunc):
     def __init__(
         self,
         model: Callable[..., dict],
-        objective: Objective,
-        secondary: Optional[List[Objective]] = None,
+        objective: List[Objective],
         constraint: Optional[list[str]] = None,
         default: Optional[dict] = None,
         record_time: bool = False,
@@ -623,7 +587,6 @@ class SequentialLoss(LossFunc):
         super().__init__(
             model=model,
             objective=objective,
-            secondary=secondary,
             constraint=constraint,
             default=default,
             record_time=record_time,
@@ -631,7 +594,13 @@ class SequentialLoss(LossFunc):
             kwargs_mode=kwargs_mode,
         )
 
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
@@ -646,8 +615,10 @@ class SequentialLoss(LossFunc):
         ----------
         X : list
             List of solutions to evaluate. be carefull if a solution is a list X must be a list of lists.
-        kwargs : dict, optional
+        info : dict, optional
             Additionnal informations to save before the score.
+        xinfo : dict, optional
+            Point wise additionnal informations to save before the score.
 
         Returns
         -------
@@ -662,35 +633,32 @@ class SequentialLoss(LossFunc):
             stopping = lambda *args: False
 
         # Define outputs
-        y = np.ones(len(X), dtype=float)
+        y = np.ones((len(X), len(self.objective)), dtype=float)
 
         if self.constraint:
             list_constraint = np.ones((len(X), len(self.constraint)), dtype=float)
         else:
             list_constraint = None
 
-        if self.secondary:
-            list_secondary = np.ones((len(X), len(self.secondary)), dtype=float)
-        else:
-            list_secondary = None
-
         if self.info:
             list_info = np.ones((len(X), len(self.info)), dtype=float)
         else:
             list_info = None
+
+        if self.xinfo:
+            list_xinfo = np.ones((len(X), len(self.xinfo)), dtype=float)
+            dict_xinfo = dict.fromkeys(self.xinfo, 0.0)
+        else:
+            list_xinfo = None
+            dict_xinfo = {}
 
         idx = 0
         while idx < len(X) and not stopping():
             x = X[idx]
             outputs, model = self._compute_loss(x)
 
-            y[idx] = outputs["objective0"]
-
-            if self.secondary:
-                list_secondary[idx] = [outputs[f"objective{i}"] for i in range(1, len(self.secondary) + 1)]  # type: ignore
-                current_sec = list_secondary[idx]  # type: ignore
-            else:
-                current_sec = None
+            for i in range(len(self.objective)):
+                y[idx][i] = outputs[f"objective{i}"]
 
             if self.constraint:
                 list_constraint[idx] = [outputs[k] for k in self.constraint]  # type: ignore
@@ -699,10 +667,20 @@ class SequentialLoss(LossFunc):
                 current_con = None
 
             if self.info:
-                list_info[idx] = [kwargs[k] for k in self.info]  # type: ignore
-                current_info = list_constraint[idx]  # type: ignore
+                for i, k in enumerate(self.info):
+                    list_info[idx][i] = info[k]  # type: ignore
+                current_info = list_info[idx]  # type: ignore
             else:
                 current_info = None
+
+            if self.xinfo:
+                for i, k in enumerate(self.xinfo):
+                    list_xinfo[idx][i] = xinfo[k][idx]  # type: ignore
+                    dict_xinfo[k] = xinfo[k][idx]  # type: ignore
+                current_xinfo = list_xinfo[idx]  # type: ignore
+            else:
+                current_xinfo = None
+                dict_xinfo = {}
 
             # Saving
             if self.save:
@@ -711,19 +689,19 @@ class SequentialLoss(LossFunc):
                     self._save_model(self.calls, model)
 
                 # Save score and solution into a file
-                self._save_file(x, **outputs, id=self.calls, **kwargs)
+                self._save_file(x, **outputs, id=self.calls, **info, **dict_xinfo)
 
             self._save_best(
                 x,
-                outputs["objective0"],
-                secondary=current_sec,
+                y[idx],
                 constraint=current_con,
                 info=current_info,
+                xinfo=current_xinfo,
             )
 
             idx += 1
 
-        return X, y, list_secondary, list_constraint, list_info
+        return X, y, list_constraint, list_info, list_xinfo
 
     def _save_model(self, mid: int, trained_model: object):
         # Save model into a file if it is better than the best found one
@@ -738,8 +716,7 @@ class MPILoss(LossFunc):
     def __init__(
         self,
         model: Callable[..., dict],
-        objective: Objective,
-        secondary: Optional[List[Objective]] = None,
+        objective: List[Objective],
         constraint: Optional[list[str]] = None,
         default: Optional[dict] = None,
         record_time: bool = False,
@@ -764,10 +741,9 @@ class MPILoss(LossFunc):
             And :math:`y` can be a single value, a list, a tuple, or a dict,
             containing the loss value and other optionnal information.
             It can also be of mixed types, containing, strings, float, int...
-        objective : Objective
-            An :code:`Objective` object determines what the optimization problem is.
-        secondary : list[Objective], default=None,
-            Secondary objectives for Multi-objective optimization.
+        objective : List[Objective]
+            A list of :code:`Objective` object determines what the optimization problem is.
+            Mono-objective if the list contains only one :code:`Objective`, otherwise multi-objective.
         constraint : list[str], default=None
             List of keys linked to :ref:`lf` outputs.
             Constraints are modeled by inequation. The constraint is met if the value is
@@ -841,14 +817,13 @@ class MPILoss(LossFunc):
 
             raise err
 
-        ###############
-        # PAARAMETERS #
-        ###############
+        ##############
+        # PARAMETERS #
+        ##############
 
         super().__init__(
             model=model,
             objective=objective,
-            secondary=secondary,
             constraint=constraint,
             default=default,
             record_time=record_time,
@@ -878,9 +853,10 @@ class MPILoss(LossFunc):
         # list of idle workers
         self.idle = list(range(1, self.workers_size + 1))
 
-        # loss worker rank : (point, id, info, source)
+        # loss worker rank : (point, id, info, xinfo, source, point_id within batch)
         self.p_historic = {
-            i: [None, None, None, None] for i in range(1, self.workers_size + 1)
+            i: [None, None, None, None, None, None]
+            for i in range(1, self.workers_size + 1)
         }  # historic of points sent to workers
 
         self._strategy = None  # set to None for definition issue
@@ -909,62 +885,6 @@ class MPILoss(LossFunc):
                 os.path.join(self.folder_name, "tmp_wks"), f"worker{self.rank}"
             )
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        del state["comm"]
-        del state["status"]
-        del state["p_name"]
-        del state["rank"]
-        del state["p"]
-        del state["_personnal_folder"]
-        del state["pqueue"]
-        del state["idle"]
-        del state["p_historic"]
-        del state["_strategy"]
-        del state["is_master"]
-        del state["is_worker"]
-        del state["_MPILoss__master_rank"]
-        del state["model"]
-        del state["_init_time"]
-        return state
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
-        self.__dict__.update(state)
-
-        try:
-            self.comm = MPI.COMM_WORLD
-            self.status = MPI.Status()
-            self.p_name = MPI.Get_processor_name()
-
-            self.rank = self.comm.Get_rank()
-            self.p = self.comm.Get_size()
-        except Exception as err:
-            logger.error(
-                """To use MPILoss object you need to install mpi4py and an MPI
-                distribution.\nYou can use: pip install zellij[Parallel]"""
-            )
-
-            raise err
-
-        self._personnal_folder = os.path.join("tmp_wks", f"worker{self.rank}")
-
-        self.pqueue = Queue()
-
-        # list of idle workers
-        self.idle = list(range(1, self.workers_size + 1))
-
-        # loss worker rank : (point, id, info, source)
-        self.p_historic = {
-            i: [None, None, None, None] for i in range(1, self.workers_size + 1)
-        }  # historic of points sent to workers
-
-        self.is_master = self.rank == 0
-        self.is_worker = self.rank != 0
-
-        # Property, defines parallelisation strategy
-        self._master_rank = 0
-
     @property
     def _master_rank(self) -> int:
         return self.__master_rank
@@ -991,15 +911,21 @@ class MPILoss(LossFunc):
                     """
             )
 
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
         Optional[np.ndarray],
         Optional[np.ndarray],
     ]:
-        new_x, score, secondary, constraints, info = self._strategy(X, stop_obj=stop_obj, **kwargs)  # type: ignore
-        return new_x, score, secondary, constraints, info
+        new_x, score, constraints, linfo, lxinfo = self._strategy(X, stop_obj=stop_obj, info=info, xinfo=xinfo)  # type: ignore
+        return new_x, score, constraints, linfo, lxinfo
 
     def master(
         self, pqueue: Optional[Queue] = None, stop_obj: Optional[Stopping] = None
@@ -1056,11 +982,19 @@ class MPILoss(LossFunc):
                 outputs,
                 point_id,
                 point_info,
+                point_xinfo,
                 point_source,
+                batch_id,
             ) = self._recv_score(msg, source, idle, historic)
 
             cnt = self._process_outputs(
-                point, outputs, point_id, point_info, point_source
+                point,
+                outputs,
+                point_id,
+                point_info,
+                point_xinfo,
+                point_source,
+                batch_id,
             )
 
         # receive a point to add to the queue
@@ -1099,26 +1033,35 @@ class MPILoss(LossFunc):
     # receive score from workers
     def _recv_score(
         self, msg, source: int, idle: List[int], historic: dict
-    ) -> Tuple[list, dict, int, dict, int]:
+    ) -> Tuple[list, dict, int, dict, dict, int, int]:
         logger.debug(
             f"MASTER {self.rank} receiving score from WORKER {source} : {msg}, historic : {historic[source]}"
         )
         point = historic[source][0][:]
         point_id = historic[source][1]
         point_info = historic[source][2].copy()
-        point_source = historic[source][3]
-        historic[source] = [None, None, None, None]
+        point_xinfo = historic[source][3].copy()
+        point_source = historic[source][4]
+        batch_id = historic[source][5]
+        historic[source] = [None, None, None, None, None, None]
 
         outputs = msg
 
         idle.append(source)
 
-        return point, outputs, point_id, point_info, point_source
+        return point, outputs, point_id, point_info, point_xinfo, point_source, batch_id
 
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info: dict, source: int
+        self,
+        point: list,
+        outputs: dict,
+        id: int,
+        info: dict,
+        xinfo: dict,
+        source: int,
+        batch_id: int,
     ) -> bool:
-        return self._strategy._process_outputs(point, outputs, id, info, source)  # type: ignore
+        return self._strategy._process_outputs(point, outputs, id, info, xinfo, source, batch_id)  # type: ignore
 
     def _stop(self):
         """stop
@@ -1131,7 +1074,7 @@ class MPILoss(LossFunc):
             if i != self.rank:
                 self.comm.send(dest=i, tag=9, obj=False)
 
-    def _save_model(self, score: float, source: int):
+    def _save_model(self, score: np.ndarray, source: int):
         """_save_model
 
         Save a given model
@@ -1145,15 +1088,18 @@ class MPILoss(LossFunc):
         """
 
         # Save model into a file if it is better than the best found one
-        if score < self.best_score:
-            master_path = os.path.join(self.model_path, f"{self.folder_name}_best")
-            worker_path = os.path.join(
-                os.path.join(self.folder_name, "tmp_wks"), f"worker{source}"
-            )
+        for i in range(len(self.objective)):
+            if score[i] < self.best_score[i]:
+                master_path = os.path.join(
+                    self.model_path, f"{self.folder_name}_best_obj{i}"
+                )
+                worker_path = os.path.join(
+                    os.path.join(self.folder_name, "tmp_wks"), f"worker{source}"
+                )
 
-            if os.path.isdir(worker_path):
-                os.system(f"rm -rf {master_path}")
-                os.system(f"cp -rf {worker_path} {master_path}")
+                if os.path.isdir(worker_path):
+                    os.system(f"rm -rf {master_path}")
+                    os.system(f"cp -rf {worker_path} {master_path}")
 
     def _wsave_model(self, model):
         if hasattr(model, "save") and callable(getattr(model, "save")):
@@ -1226,35 +1172,41 @@ class _Parallel_strat:
 
     @abstractmethod
     def __call__(
-        self, X: list, stop_obj: Optional[Stopping] = None, **kwargs
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
     ) -> Tuple[list, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
         pass
 
     def _do_save(
         self,
         point: list,
+        y: np.ndarray,
         outputs: dict,
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
         info: Optional[np.ndarray],
+        xinfo: Optional[np.ndarray],
         info_dict: dict,
+        xinfo_dict: dict,
         source: int,
     ):
         # Save score and solution into the object
         self._lf._save_best(
             point,
-            outputs["objective0"],
-            secondary=secondary,
+            y,
             constraint=constraint,
             info=info,
+            xinfo=xinfo,
         )
 
         if self._lf.save:
             # Save model into a file if it is better than the best found one
-            self._lf._save_model(outputs["objective0"], source)
+            self._lf._save_model(y, source)
 
             # Save score and solution into a file
-            self._lf._save_file(point, **outputs, **info_dict)
+            self._lf._save_file(point, **outputs, **info_dict, **xinfo_dict)
 
 
 # Mono Synchrone -> Save score return list of score
@@ -1263,12 +1215,18 @@ class _MonoSynchronous_strat(_Parallel_strat):
         super().__init__(loss, master_rank, **kwargs)
 
         self.y = np.empty(1, dtype=float)  # Initialized during call
-        self.list_secondary = None  # Initialized during call
         self.list_constraint = None  # Initialized during call
         self.list_info = None  # Initialized during call
+        self.list_xinfo = None  # Initialized during call
 
     # Executed by Experiment to compute X
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
@@ -1278,16 +1236,9 @@ class _MonoSynchronous_strat(_Parallel_strat):
 
         pqueue = Queue()
         for id, x in enumerate(X):
-            pqueue.put((x, id, kwargs, None))
+            pqueue.put((x, id, info, xinfo, None, id))
 
-        self.y = np.ones(len(X), dtype=float)
-
-        if self._lf.secondary:
-            self.list_secondary = np.ones(
-                (len(X), len(self._lf.secondary)), dtype=float
-            )
-        else:
-            self.list_secondary = None
+        self.y = np.ones((len(X), len(self._lf.objective)), dtype=float)
 
         if self._lf.constraint:
             self.list_constraint = np.ones(
@@ -1301,28 +1252,30 @@ class _MonoSynchronous_strat(_Parallel_strat):
         else:
             self.list_info = None
 
+        if self._lf.xinfo:
+            self.list_xinfo = np.ones((len(X), len(self._lf.xinfo)), dtype=float)
+        else:
+            self.list_xinfo = None
+
         self._lf.master(pqueue, stop_obj=stop_obj)
 
-        return X, self.y, self.list_secondary, self.list_constraint, self.list_info
+        return X, self.y, self.list_constraint, self.list_info, self.list_xinfo
 
     # Executed by master when it receives a score from a worker
     # Here Meta master and loss master are the same process, so shared memory
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
+        self,
+        point: list,
+        outputs: dict,
+        id: int,
+        info_dict: dict,
+        xinfo_dict: dict,
+        source: int,
+        batch_id: int,
     ) -> bool:
-        self.y[id] = outputs["objective0"]
 
-        if self._lf.secondary:
-            secondary = np.array(
-                [
-                    outputs[f"objective{i}"]
-                    for i in range(1, len(self._lf.secondary) + 1)
-                ],
-                dtype=float,
-            )
-            self.list_secondary[id] = secondary  # type: ignore
-        else:
-            secondary = None
+        for i in range(len(self._lf.objective)):
+            self.y[id][i] = outputs[f"objective{i}"]
 
         if self._lf.constraint:
             constraint = np.array(
@@ -1333,18 +1286,31 @@ class _MonoSynchronous_strat(_Parallel_strat):
             constraint = None
 
         if self._lf.info:
-            info = np.array([info_dict[k] for k in self._lf.info], dtype=float)
-            self.list_info[id] = info  # type: ignore
+            for i, k in enumerate(self._lf.info):
+                self.list_info[id][i] = info_dict[k]  # type: ignore
+            info = self.list_info[id]  # type: ignore
         else:
             info = None
 
+        if self._lf.xinfo:
+            pxinfo_dict = dict.fromkeys(self._lf.xinfo, 0.0)
+            for i, k in enumerate(self._lf.xinfo):
+                self.list_xinfo[batch_id][i] = xinfo_dict[k][batch_id]  # type: ignore
+                pxinfo_dict[k] = xinfo_dict[k][batch_id]
+            xinfo = self.list_xinfo[batch_id]  # type: ignore
+        else:
+            pxinfo_dict = {}
+            xinfo = None
+
         self._do_save(
             point=point,
+            y=self.y[id],
             outputs=outputs,
-            secondary=secondary,
             constraint=constraint,
             info=info,
+            xinfo=xinfo,
             info_dict=info_dict,
+            xinfo_dict=pxinfo_dict,
             source=source,
         )
 
@@ -1371,28 +1337,36 @@ class _MonoAsynchronous_strat(_Parallel_strat):
 
         self._computed_point = None
         self._computed_y = None
-        self._computed_secondary = None
         self._computed_constraint = None
         self._computed_info = None
+        self._computed_xinfo = None
 
     # send a point to loss master
-    def _send_to_master(self, point: list, **kwargs):
+    def _send_to_master(
+        self, point: list, batch_id: int, info: dict = {}, xinfo: dict = {}
+    ):
         id = self._computed  # number of computed points used as id
         self._current_points[id] = point
-        self._lf.pqueue.put((point, id, kwargs, None))
+        self._lf.pqueue.put((point, id, info, xinfo, None, batch_id))
         self._computed += 1
 
     # Executed by Experiment to compute X
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
         Optional[np.ndarray],
         Optional[np.ndarray],
     ]:
-        # send point, point ID and point info
-        for point in X:
-            self._send_to_master(point, **kwargs)  # send point
+
+        for id, x in enumerate(X):
+            self._send_to_master(x, id, info=info, xinfo=xinfo)  # send point
 
         self._lf.master(stop_obj=stop_obj)
 
@@ -1406,38 +1380,35 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         else:
             raise OutputError("Master process returned a None score.")
 
-        if self._computed_secondary is not None:
-            secondary = np.array([self._computed_secondary.copy()], dtype=float)
-        else:
-            secondary = None
-
         if self._computed_constraint is not None:
             constraint = np.array([self._computed_constraint.copy()], dtype=float)
         else:
             constraint = None
 
         if self._computed_info is not None:
-            info = np.array([self._computed_info.copy()], dtype=float)
+            linfo = np.array([self._computed_info.copy()], dtype=float)
         else:
-            info = None
+            linfo = None
 
-        return [new_x], np.array([y], dtype=float), secondary, constraint, info
+        if self._computed_xinfo is not None:
+            lxinfo = np.array([self._computed_xinfo.copy()], dtype=float)
+        else:
+            lxinfo = None
+
+        return [new_x], np.array(y, dtype=float), constraint, linfo, lxinfo
 
     # Executed by master when it receives a score from a worker
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
+        self,
+        point: list,
+        outputs: dict,
+        id: int,
+        info_dict: dict,
+        xinfo_dict: dict,
+        source: int,
+        batch_id: int,
     ) -> bool:
-        y = outputs["objective0"]
-        if self._lf.secondary:
-            secondary = np.array(
-                [
-                    outputs[f"objective{i}"]
-                    for i in range(1, len(self._lf.secondary) + 1)
-                ],
-                dtype=float,
-            )
-        else:
-            secondary = None
+        y = np.array([outputs[f"objective{i}"] for i in range(len(self._lf.objective))])
 
         if self._lf.constraint:
             constraint = np.array(
@@ -1451,21 +1422,33 @@ class _MonoAsynchronous_strat(_Parallel_strat):
         else:
             info = None
 
+        if self._lf.xinfo:
+            pxinfo_dict = dict.fromkeys(self._lf.xinfo, 0.0)
+            xinfo = np.zeros(len(self._lf.xinfo), dtype=float)
+            for i, k in enumerate(self._lf.xinfo):
+                xinfo[i] = xinfo_dict[k][batch_id]
+                pxinfo_dict[k] = xinfo_dict[k][batch_id]
+        else:
+            pxinfo_dict = {}
+            xinfo = None
+
         self._do_save(
             point=point,
+            y=y,
             outputs=outputs,
-            secondary=secondary,
             constraint=constraint,
             info=info,
+            xinfo=xinfo,
             info_dict=info_dict,
+            xinfo_dict=pxinfo_dict,
             source=source,
         )
 
         self._computed_point = point
         self._computed_y = y
-        self._computed_secondary = secondary
         self._computed_constraint = constraint
         self._computed_info = info
+        self._computed_xinfo = xinfo
 
         return False
 
@@ -1477,22 +1460,28 @@ class _MonoFlexible_strat(_Parallel_strat):
 
         self._flex_x = []
         self._flex_y = []
-        self._flex_s = []
         self._flex_c = []
         self._flex_i = []
+        self._flex_xi = []
 
         # When queue size is < threshold, the loss master stop, so meta can return new points
         self.threshold = threshold
 
     # send a point to loss master
-    def _send_to_master(self, point: list, **kwargs):
+    def _send_to_master(self, point: list, batch_id: int, info: dict, xinfo: dict):
         id = self._computed  # number of computed points used as id
         self._current_points[id] = point
-        self._lf.pqueue.put((point, id, kwargs, None))
+        self._lf.pqueue.put((point, id, info, xinfo, None, batch_id))
         self._computed += 1
 
     # Executed by Experiment to compute X
-    def __call__(self, X: list, stop_obj: Optional[Stopping] = None, **kwargs) -> Tuple[
+    def __call__(
+        self,
+        X: list,
+        stop_obj: Optional[Stopping] = None,
+        info: dict = {},
+        xinfo: dict = {},
+    ) -> Tuple[
         list,
         np.ndarray,
         Optional[np.ndarray],
@@ -1501,20 +1490,15 @@ class _MonoFlexible_strat(_Parallel_strat):
     ]:
         self._flex_x = []
         self._flex_y = []
-        self._flex_s = []
         self._flex_c = []
         self._flex_i = []
+        self._flex_xi = []
 
         # send point, point ID and point info
-        for point in X:
-            self._send_to_master(point, **kwargs)  # send point
+        for id, x in enumerate(X):
+            self._send_to_master(x, id, info=info, xinfo=xinfo)  # send point
 
         self._lf.master(stop_obj=stop_obj)
-
-        if self._lf.secondary:
-            secondary = np.array(self._flex_s, dtype=float)
-        else:
-            secondary = None
 
         if self._lf.constraint:
             constraint = np.array(self._flex_c, dtype=float)
@@ -1522,38 +1506,44 @@ class _MonoFlexible_strat(_Parallel_strat):
             constraint = None
 
         if self._lf.info:
-            info = np.array(self._flex_i, dtype=float)
+            linfo = np.array(self._flex_i, dtype=float)
         else:
-            info = None
+            linfo = None
+
+        if self._lf.xinfo:
+            lxinfo = np.array(self._flex_xi, dtype=float)
+        else:
+            lxinfo = None
 
         return (
             self._flex_x,
             np.array(self._flex_y, dtype=float),
-            secondary,
             constraint,
-            info,
+            linfo,
+            lxinfo,
         )
 
     # Executed by master when it receives a score from a worker
     def _process_outputs(
-        self, point: list, outputs: dict, id: int, info_dict: dict, source: int
+        self,
+        point: list,
+        outputs: dict,
+        id: int,
+        info_dict: dict,
+        xinfo_dict: dict,
+        source: int,
+        batch_id: int,
     ) -> bool:
         logger.debug(
             f"FLEXIBLE: {len(self._flex_x)},{len(self._flex_y)},{len(self._flex_c)} | SIZE : {self._lf.pqueue.qsize()} <= {self.threshold}"
         )
         self._flex_x.append(point)
-        self._flex_y.append(outputs["objective0"])
-        if self._lf.secondary:
-            secondary = np.array(
-                [
-                    outputs[f"objective{i}"]
-                    for i in range(1, len(self._lf.secondary) + 1)
-                ],
-                dtype=float,
-            )
-            self._flex_s.append(secondary)
-        else:
-            secondary = None
+
+        y = np.array(
+            [outputs[f"objective{i}"] for i in range(0, len(self._lf.objective))],
+            dtype=float,
+        )
+        self._flex_y.append(y)
 
         if self._lf.constraint:
             constraint = np.array(
@@ -1569,13 +1559,26 @@ class _MonoFlexible_strat(_Parallel_strat):
         else:
             info = None
 
+        if self._lf.xinfo:
+            pxinfo_dict = dict.fromkeys(self._lf.xinfo, 0.0)
+            xinfo = np.zeros(len(self._lf.xinfo), dtype=float)
+            for i, k in enumerate(self._lf.xinfo):
+                xinfo[i] = xinfo_dict[k][batch_id]
+                pxinfo_dict[k] = xinfo_dict[k][batch_id]
+            self._flex_xi.append(xinfo)
+        else:
+            pxinfo_dict = {}
+            xinfo = None
+
         self._do_save(
             point=point,
+            y=y,
             outputs=outputs,
-            secondary=secondary,
             constraint=constraint,
             info=info,
+            xinfo=xinfo,
             info_dict=info_dict,
+            xinfo_dict=pxinfo_dict,
             source=source,
         )
         return self._lf.pqueue.qsize() >= self.threshold
@@ -1583,8 +1586,7 @@ class _MonoFlexible_strat(_Parallel_strat):
 
 # Wrap different loss functions
 def Loss(
-    objective: Objective,
-    secondary: Optional[List[Objective]] = None,
+    objective: List[Objective],
     constraint: Optional[list[str]] = None,
     default: Optional[dict] = None,
     record_time: bool = False,
@@ -1606,8 +1608,9 @@ def Loss(
         And :math:`y` can be a single value, a list, a tuple, or a dict,
         containing the loss value and other optionnal information.
         It can also be of mixed types, containing, strings, float, int...
-    objective : Objective
+    objective : List[Objective]
         An :code:`Objective` object determines what the optimization problem is.
+        Mono-objective, if the list contains only one :code:`Objective`. Otherwise, multi-Objective.
     record_time : boolean, default=False
         If True, :code:`start_time`, :code:`end_time`, :code:`start_date`, :code:`end_date` will be recorded
         and saved in the save file for each :code:`__call__`.
@@ -1702,7 +1705,6 @@ def Loss(
             return MPILoss(
                 model=model,
                 objective=objective,
-                secondary=secondary,
                 constraint=constraint,
                 default=default,
                 record_time=record_time,
@@ -1716,7 +1718,6 @@ def Loss(
             return SequentialLoss(
                 model=model,
                 objective=objective,
-                secondary=secondary,
                 constraint=constraint,
                 default=default,
                 record_time=record_time,

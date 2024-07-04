@@ -91,8 +91,8 @@ class Benchmark(ABC):
 class Sphere(Benchmark):
     def __init__(
         self,
-        lower=0.0,
-        upper=10.0,
+        lower=-5.12,
+        upper=5.12,
         optimum=0,
         shift=None,
         rotate=None,
@@ -158,11 +158,11 @@ class Rosenbrock(Benchmark):
         self.poptimum = 1.0
 
     def __call__(self, y):
-        z = self.transform(y) + 1
+        z = self.transform(y)
         if self.shuffle is not None:
             z = z[self.shuffle]
         return {
-            "obj": np.sum((z[:-1] - 1) ** 2 + 100 * (z[:-1] ** 2 - z[1:]) ** 2)
+            "obj": np.sum(100 * (z[1:] - z[:-1] ** 2) ** 2 + (1 - z[:-1]) ** 2)
             + self.bias
         }
 

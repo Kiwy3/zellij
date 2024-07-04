@@ -4,14 +4,14 @@
 # License: CeCILL-C (http://www.cecill.info/index.fr.html)
 from __future__ import annotations
 from zellij.core.errors import InputError
-from zellij.core.metaheuristic import UnitMetaheuristic
-from zellij.strategies.tools.turbo_state import async_update_state
+from zellij.core.metaheuristic import UnitMetaheuristic, MonoObjective
+from zellij.strategies.tools.turbo_state import update_state
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from zellij.core.search_space import UnitSearchspace
-    from zellij.strategies.tools.turbo_state import AsyncTurboState
+    from zellij.strategies.tools.turbo_state import TurboState
 
 import torch
 from torch.quasirandom import SobolEngine
@@ -38,8 +38,8 @@ import logging
 logger = logging.getLogger("zellij.scbo")
 
 
-class TuRBO(UnitMetaheuristic):
-    """Scalable Constrained Bayesian Optimization
+class TuRBO(UnitMetaheuristic, MonoObjective):
+    """Trust Region Bayesian optimization
 
     Works in the unit hypercube. :code:`converter` :ref:`addons` are required.
 
@@ -89,7 +89,7 @@ class TuRBO(UnitMetaheuristic):
     def __init__(
         self,
         search_space: UnitSearchspace,
-        turbo_state: AsyncTurboState,
+        turbo_state: TurboState,
         batch_size: int,
         verbose: bool = True,
         surrogate=SingleTaskGP,
@@ -108,7 +108,7 @@ class TuRBO(UnitMetaheuristic):
         ----------
         search_space : UnitSearchspace
             UnitSearchspace :ref:`sp`.
-        turbo_state : AsyncTurboState
+        turbo_state : TurboState
             :code:`AsyncTurboState` object.
         verbose : bool
             If False, there will be no print.
@@ -279,7 +279,7 @@ class TuRBO(UnitMetaheuristic):
 
     def generate_batch(
         self,
-        state: AsyncTurboState,
+        state: TurboState,
         model,  # GP model
         X,  # Evaluated points on the domain [0, 1]^d
         Y,  # Function values
@@ -363,10 +363,10 @@ class TuRBO(UnitMetaheuristic):
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Abstract method describing one step of the :ref:`meta`.
@@ -389,6 +389,10 @@ class TuRBO(UnitMetaheuristic):
         info
             Dictionnary of additionnal information linked to :code:`points`.
         """
+
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
+
         gc.collect()
         torch.cuda.empty_cache()
         ask_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
@@ -410,13 +414,12 @@ class TuRBO(UnitMetaheuristic):
                 "successes": 0.0,
                 "failures": 0.0,
                 "trestart": self.turbo_state.restart_triggered,
-                "greedy": self.turbo_state.greedy_move,
                 "best_value": self.turbo_state.best_value,
             }
             rdict["model"] = -1
             rdict["beam"] = len(self.train_obj)
 
-            return train_x, rdict
+            return train_x, rdict, {}
 
         elif X is None or Y is None or info is None:
             raise InputError(
@@ -459,20 +462,14 @@ class TuRBO(UnitMetaheuristic):
                     "successes": 0.0,
                     "failures": 0.0,
                     "trestart": self.turbo_state.restart_triggered,
-                    "greedy": self.turbo_state.greedy_move,
                     "best_value": self.turbo_state.best_value,
                 }
                 rdict["model"] = -1
                 rdict["beam"] = len(self.train_obj)
-                return self._generate_initial_data(1), rdict
+                return self._generate_initial_data(1), rdict, {}
             else:
-                self.turbo_state = async_update_state(
-                    state=self.turbo_state,
-                    X_next=new_x,
-                    Y_next=new_obj,
-                    lengths=new_lengths,
-                    successes=new_successes,
-                    failures=new_failures,
+                self.turbo_state = update_state(
+                    state=self.turbo_state, X_next=new_x, Y_next=new_obj
                 )
                 with gpytorch.settings.max_cholesky_size(self.cholesky_size):
                     # reinitialize the models so they are ready for fitting on next iteration
@@ -501,12 +498,11 @@ class TuRBO(UnitMetaheuristic):
                             "successes": 0.0,
                             "failures": 0.0,
                             "trestart": self.turbo_state.restart_triggered,
-                            "greedy": self.turbo_state.greedy_move,
                             "best_value": self.turbo_state.best_value,
                         }
                         rdict["model"] = -1
                         rdict["beam"] = len(self.train_obj)
-                        return self._generate_initial_data(len(Y)), rdict
+                        return self._generate_initial_data(len(Y)), rdict, {}
 
                     model.to("cpu")
                     gc.collect()
@@ -534,13 +530,12 @@ class TuRBO(UnitMetaheuristic):
                         "successes": self.turbo_state.success_counter,
                         "failures": self.turbo_state.failure_counter,
                         "trestart": self.turbo_state.restart_triggered,
-                        "greedy": self.turbo_state.greedy_move,
                         "best_value": self.turbo_state.best_value,
                     }
                     rdict["model"] = self.models_number
                     rdict["beam"] = len(self.train_obj)
 
-                    return new_x.cpu().numpy().tolist(), rdict
+                    return new_x.cpu().numpy().tolist(), rdict, {}
 
     def __getstate__(self):
         state = self.__dict__.copy()

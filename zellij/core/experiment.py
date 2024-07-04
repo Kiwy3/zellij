@@ -7,6 +7,8 @@ from __future__ import annotations
 from abc import ABC
 
 from typing import Optional, Tuple, List, TYPE_CHECKING
+from zellij.core.metaheuristic import MonoObjective, MultiObjective, Constrained
+
 
 if TYPE_CHECKING:
     from zellij.core.stop import Stopping
@@ -54,9 +56,9 @@ class RunExperiment(ABC):
         stop: Stopping,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
     ) -> Tuple[
         Optional[list],
         Optional[np.ndarray],
@@ -80,8 +82,6 @@ class RunExperiment(ABC):
             List of computed solutions. Can be used to initialize a :ref:`meta` with initial solutions.
         Y : np.ndarray, optional
             List of computed loss values. Can be used to initialize a :ref:`meta` with initial loss values.
-        secondary : np.ndarray, optional
-            Array of floats, secondary objective values. See :ref:`lf`.
         constraint : np.ndarray, optional
             List of constraints values. See :ref:`lf`.
         info : np.ndarray, optional
@@ -98,7 +98,7 @@ class RunExperiment(ABC):
         """
         cnt = True  # continue optimization
 
-        X, info_dict = meta.forward(X, Y, secondary, constraint, info)
+        X, info_dict, xinfo_dict = meta.forward(X, Y, constraint, info, xinfo)
         if len(X) < 1:
             return None, None, None, None, None, False
         else:
@@ -106,20 +106,20 @@ class RunExperiment(ABC):
                 # convert from metaheuristic space to loss space
                 X = meta.search_space.reverse(X)
                 # compute loss
-                X, Y, secondary, constraint, info = loss(X, stop_obj=stop, **info_dict)
+                X, Y, constraint, info, xinfo = loss(X, stop, info_dict, xinfo_dict)
                 # if meta return empty solutions
-                if X:
+                if X is None:
+                    cnt = False  # stop optimization
+                else:
                     # convert from loss space to metaheuristic space
                     X = meta.search_space.convert(X)
-                else:
-                    cnt = False  # stop optimization
             else:
-                X, Y, secondary, constraint, info = loss(X, stop_obj=stop, **info_dict)
+                X, Y, constraint, info, xinfo = loss(X, stop, info_dict, xinfo_dict)
                 # if meta return empty solutions
                 if X is None:
                     cnt = False  # stop optimization
 
-            return X, Y, secondary, constraint, info, cnt
+            return X, Y, constraint, info, xinfo, cnt
 
     def run(
         self,
@@ -128,9 +128,9 @@ class RunExperiment(ABC):
         stop: Stopping,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
     ):
         """
         Optimization loop.
@@ -145,8 +145,6 @@ class RunExperiment(ABC):
             List of computed solutions. Can be used to initialize a :ref:`meta` with initial solutions.
         Y : np.ndarray, optional
             List of computed loss values. Can be used to initialize a :ref:`meta` with initial loss values.
-        secondary : np.ndarray, optional
-            Array of floats, secondary objective values. See :ref:`lf`.
         constraint : np.ndarray, optional
             List of constraints values. See :ref:`lf`.
         info : np.ndarray, optional
@@ -161,8 +159,8 @@ class RunExperiment(ABC):
         while not stop() and cnt:
             if self.exp.verbose:
                 print(f"STATUS: {stop}", end="\r", flush=True)
-            X, Y, secondary, constraint, info, cnt = self._run_forward_loss(
-                meta, loss, stop, X, Y, secondary, constraint, info
+            X, Y, constraint, info, xinfo, cnt = self._run_forward_loss(
+                meta, loss, stop, X, Y, constraint, info, xinfo
             )
             if X is None:
                 logger.warning(
@@ -206,9 +204,9 @@ class RunParallelExperiment(RunExperiment):
         stop: Stopping,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
     ):
         """
         Optimization loop.
@@ -225,8 +223,6 @@ class RunParallelExperiment(RunExperiment):
             List of computed solutions. Can be used to initialize a :ref:`meta` with initial solutions.
         Y : np.ndarray, optional
             List of computed loss values. Can be used to initialize a :ref:`meta` with initial loss values.
-        secondary : np.ndarray, optional
-            Array of floats, secondary objective values. See :ref:`lf`.
         constraint : np.ndarray, optional
             List of constraints values. See :ref:`lf`.
         info : np.ndarray, optional
@@ -247,15 +243,15 @@ class RunParallelExperiment(RunExperiment):
                     if self.exp.verbose:
                         print(f"STATUS: {stop}", end="\r", flush=True)
 
-                    X, Y, secondary, constraint, info, cnt = self._run_forward_loss(
-                        meta,
-                        loss,
-                        stop,
-                        X,
-                        Y,
-                        secondary,
-                        constraint,
-                        info,
+                    X, Y, constraint, info, xinfo, cnt = self._run_forward_loss(
+                        meta=meta,
+                        loss=loss,
+                        stop=stop,
+                        X=X,
+                        Y=Y,
+                        constraint=constraint,
+                        info=info,
+                        xinfo=xinfo,
                     )
                 if self.exp.verbose:
                     print(f"ENDING: {stop}")
@@ -332,6 +328,25 @@ class Experiment:
 
             self.meta._save = self.save
 
+        self._check_meta()
+
+    def _check_meta(self):
+        if isinstance(self.meta, MonoObjective):
+            if len(self.loss.objective) != 1:
+                raise InitializationError(
+                    f"For MonoObjective metaheuristic, the number of objectives in Loss must be 1."
+                )
+        elif isinstance(self.meta, MultiObjective):
+            if len(self.loss.objective) <= 1:
+                raise InitializationError(
+                    f"For MultiObjective metaheuristic, the number of objectives in Loss must be > 1."
+                )
+        if isinstance(self.meta, Constrained):
+            if self.loss.constraint is None or len(self.loss.constraint) == 0:
+                raise InitializationError(
+                    f"For Constrained metaheuristic, the number of constraints in Loss must be > 1."
+                )
+
     @property
     def loss(self) -> LossFunc:
         return self._loss
@@ -343,6 +358,8 @@ class Experiment:
             self._loss.labels = [v.label for v in self.meta.search_space.variables]  # type: ignore
             if self.meta.info:
                 self._loss.info = self.meta.info
+            if self.meta.xinfo:
+                self._loss.xinfo = self.meta.xinfo
 
             # Define run strategies
             if isinstance(value, MPILoss):
@@ -376,13 +393,20 @@ class Experiment:
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
     ):
         start = time.time()
         self.strategy.run(
-            self.meta, self.loss, self.stop, X, Y, secondary, constraint, info
+            meta=self.meta,
+            loss=self.loss,
+            stop=self.stop,
+            X=X,
+            Y=Y,
+            constraint=constraint,
+            info=info,
+            xinfo=xinfo,
         )
         end = time.time()
         self.ttime += end - start

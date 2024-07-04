@@ -71,6 +71,7 @@ class Metaheuristic(ABC):
 
         # Keys from additionnal info to pass at each forward
         self.info = None
+        self.xinfo = None
 
     @property
     def search_space(self) -> Searchspace:
@@ -85,10 +86,10 @@ class Metaheuristic(ABC):
         self,
         X: Optional[list],
         Y: Optional[np.ndarray],
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
         info: Optional[np.ndarray],
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray],
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Abstract method describing one step of the :ref:`meta`.
@@ -98,9 +99,7 @@ class Metaheuristic(ABC):
         X : list
             List of points.
         Y : numpy.ndarray[float]
-            List of loss values.
-        secondary : np.ndarray, optional
-            :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
+            Array of size :code:`len(X)xlen(objective)` containing values for each point and objective.
         constraint : np.ndarray, optional
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
         info : np.ndarray, optional
@@ -236,6 +235,18 @@ class DiscreteMetaheuristic(Metaheuristic):
             )
 
 
+class MonoObjective:
+    pass
+
+
+class MultiObjective:
+    pass
+
+
+class Constrained:
+    pass
+
+
 class MockMixedMeta(Metaheuristic):
     """MockMeta
 
@@ -256,34 +267,63 @@ class MockMixedMeta(Metaheuristic):
         search_space: Searchspace,
         verbose: bool = True,
         iteration_error=None,
+        loss=None,
     ):
         super().__init__(search_space, verbose)
         self.points = points
         self.iteration_error = iteration_error if iteration_error else float("inf")
 
-        self.iteration = 0
+        self.iteration = 1
+        self.info = ["iteration", "miteration", "piteration", "mpiteration"]
+        if loss:
+            self.xinfo = ["idp1", "idp2", "x1", "f(x)"]
+        else:
+            self.xinfo = ["idp1", "idp2", "x1"]
+        self.loss = loss
 
     def forward(
         self,
         X: Optional[list],
         Y: Optional[np.ndarray],
-        secondary: Optional[np.ndarray],
         constraint: Optional[np.ndarray],
         info: Optional[np.ndarray],
-    ) -> Tuple[list, dict]:
-        additionnal = {"algorithm": "MockMeta", "iteration": self.iteration}
+        xinfo: Optional[np.ndarray],
+    ) -> Tuple[list, dict, dict]:
+        additionnal = {
+            "algorithm": "MockMeta",
+            "iteration": self.iteration,
+            "miteration": -self.iteration,
+            "piteration": info[0, 0] if info is not None else None,
+            "mpiteration": info[0, 1] if info is not None else None,
+        }
         if self.verbose:
             print(
                 f"""
                 MockMeta received:
                 X: {X},
                 Y: {Y},
-                secondary: {secondary},
                 constraint: {constraint},
+                INFO : {info},
+                XINFO : {xinfo},
                 """
             )
+
         if self.iteration >= self.iteration_error:
-            return [], additionnal
+            return [], additionnal, {}
         else:
+            points = self.search_space.random_point(self.points)
             self.iteration += 1
-            return self.search_space.random_point(self.points), additionnal
+            pinfo = {
+                "idp1": np.arange(0, self.points),
+                "idp2": -np.arange(0, self.points),
+                "x1": [p[0] for p in points],
+                "f(x)": np.arange(0, self.points, dtype=float),
+            }
+
+            if self.loss:
+                for i, p in enumerate(points):
+                    res, _ = self.loss._compute_loss(p)
+                    print(f"ICIIIIIIIIIIIIIII {res}")
+                    pinfo["f(x)"][i] = res["objective0"]
+
+            return points, additionnal, pinfo

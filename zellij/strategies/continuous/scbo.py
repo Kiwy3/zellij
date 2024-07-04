@@ -4,7 +4,7 @@
 # License: CeCILL-C (http://www.cecill.info/index.fr.html)
 from __future__ import annotations
 from zellij.core.errors import InputError
-from zellij.core.metaheuristic import UnitMetaheuristic
+from zellij.core.metaheuristic import UnitMetaheuristic, MonoObjective, Constrained
 from zellij.strategies.tools.turbo_state import async_update_c_state
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
@@ -38,7 +38,7 @@ import logging
 logger = logging.getLogger("zellij.scbo")
 
 
-class SCBO(UnitMetaheuristic):
+class SCBO(UnitMetaheuristic, MonoObjective, Constrained):
     """Scalable Constrained Bayesian Optimization
 
     Works in the unit hypercube. :code:`converter` :ref:`addons` are required.
@@ -438,10 +438,10 @@ class SCBO(UnitMetaheuristic):
         self,
         X: Optional[list] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """forward
 
         Abstract method describing one step of the :ref:`meta`.
@@ -452,8 +452,6 @@ class SCBO(UnitMetaheuristic):
             List of points.
         Y : numpy.ndarray[float]
             List of loss values.
-        secondary : np.ndarray, optional
-            :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
         constraint : np.ndarray, optional
             :code:`constraint` numpy ndarray of floats. See :ref:`lf` for more info.
 
@@ -464,6 +462,10 @@ class SCBO(UnitMetaheuristic):
         info
             Dictionnary of additionnal information linked to :code:`points`.
         """
+
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
+
         gc.collect()
         torch.cuda.empty_cache()
         ask_date = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
@@ -493,7 +495,7 @@ class SCBO(UnitMetaheuristic):
             rdict["model"] = -1
             rdict["beam"] = len(self.train_obj)
 
-            return train_x, rdict
+            return train_x, rdict, {}
 
         elif X is None or Y is None or constraint is None or info is None:
             raise InputError(
@@ -557,7 +559,7 @@ class SCBO(UnitMetaheuristic):
                     rdict[f"best_c{idx}"] = c.cpu().item()
                 rdict["model"] = -1
                 rdict["beam"] = len(self.train_obj)
-                return self._generate_initial_data(1), rdict
+                return self._generate_initial_data(1), rdict, {}
             else:
                 self.turbo_state = async_update_c_state(
                     state=self.turbo_state,
@@ -572,40 +574,73 @@ class SCBO(UnitMetaheuristic):
                     # reinitialize the models so they are ready for fitting on next iteration
                     # use the current state dict to speed up fitting
 
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                    memory_error_count = 0
+                    memory_error = True
 
-                    mll, model = self._initialize_model(
-                        self.train_x,
-                        self.train_obj,
-                        state_dict=None,
-                    )
-
-                    try:
-                        fit_gpytorch_mll(mll)
+                    while memory_error:
                         gc.collect()
                         torch.cuda.empty_cache()
-                    except ModelFittingError:
-                        rdict = {
-                            "iteration": self.iterations,
-                            "algorithm": "FailedSCBO",
-                            "ask_date": ask_date,
-                            "send_date": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
-                            "length": 1.0,
-                            "successes": 0.0,
-                            "failures": 0.0,
-                            "trestart": self.turbo_state.restart_triggered,
-                            "greedy": self.turbo_state.greedy_move,
-                            "best_value": self.turbo_state.best_value,
-                        }
-                        for idx, c in enumerate(
-                            self.turbo_state.best_constraint_values
-                        ):
-                            rdict[f"best_c{idx}"] = c.cpu().item()
-                        rdict["model"] = -1
-                        rdict["beam"] = len(self.train_obj)
 
-                        return self._generate_initial_data(len(Y)), rdict
+                        mll, model = self._initialize_model(
+                            self.train_x,
+                            self.train_obj,
+                            state_dict=None,
+                        )
+
+                        try:
+                            fit_gpytorch_mll(mll)
+                            memory_error = False
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                        except RuntimeError as e:
+                            if "out of memory" in str(e) and memory_error_count < 5:
+                                self.beam = max(len(self.train_x) - len(X), 1000)
+                                self.train_x, self.train_obj, self.train_c = self.prune(
+                                    self.train_x, self.train_obj, self.train_c
+                                )
+                                logger.warning(
+                                    f"Critical > Loss model ran out of memory, reducing beam length to {self.beam}"
+                                )
+                                model.to("cpu")
+                                del model
+                                del mll
+                                gc.collect()
+                                torch.cuda.empty_cache()
+                                memory_error = True
+                                memory_error_count += 1
+                            else:
+                                raise e
+                        except ModelFittingError:
+                            model.to("cpu")
+                            del model
+                            del mll
+                            gc.collect()
+                            torch.cuda.empty_cache()
+
+                            rdict = {
+                                "iteration": self.iterations,
+                                "algorithm": "FailedSCBO",
+                                "ask_date": ask_date,
+                                "send_date": datetime.today().strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                ),
+                                "length": 1.0,
+                                "successes": 0.0,
+                                "failures": 0.0,
+                                "trestart": self.turbo_state.restart_triggered,
+                                "greedy": self.turbo_state.greedy_move,
+                                "best_value": self.turbo_state.best_value,
+                            }
+                            for idx, c in enumerate(
+                                self.turbo_state.best_constraint_values
+                            ):
+                                rdict[f"best_c{idx}"] = c.cpu().item()
+                            rdict["model"] = -1
+                            rdict["beam"] = len(self.train_obj)
+
+                            memory_error = False
+
+                            return self._generate_initial_data(len(Y)), rdict, {}
 
                     model.to("cpu")
                     gc.collect()
@@ -615,21 +650,49 @@ class SCBO(UnitMetaheuristic):
                     for icon in range(self.nconstraint):
                         gc.collect()
                         torch.cuda.empty_cache()
-                        cmll, cmodel = self._initialize_model(
-                            self.train_x,
-                            self.train_c[:, icon].unsqueeze(-1),
-                            state_dict=None,
-                        )
-                        try:
-                            fit_gpytorch_mll(cmll)
-                            cmodel.to("cpu")
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            self.cmodels_list[icon] = cmodel  # type: ignore
-                        except ModelFittingError:
-                            logger.warning(
-                                f"In SCBO, ModelFittingError for constraint{icon}, previous fitted model will be used."
+
+                        memory_error_count = 0
+                        memory_error = True
+
+                        while memory_error:
+                            cmll, cmodel = self._initialize_model(
+                                self.train_x,
+                                self.train_c[:, icon].unsqueeze(-1),
+                                state_dict=None,
                             )
+                            try:
+                                fit_gpytorch_mll(cmll)
+                                memory_error = False
+                                cmodel.to("cpu")
+                                gc.collect()
+                                torch.cuda.empty_cache()
+                                self.cmodels_list[icon] = cmodel  # type: ignore
+                            except RuntimeError as e:
+                                if "out of memory" in str(e) and memory_error_count < 5:
+                                    self.beam = max(len(self.train_x) - len(X), 1000)
+                                    self.train_x, self.train_obj, self.train_c = (
+                                        self.prune(
+                                            self.train_x, self.train_obj, self.train_c
+                                        )
+                                    )
+                                    logger.warning(
+                                        f"Critical > Constraint-{icon} model ran out of memory, reducing beam length to {self.beam}"
+                                    )
+                                    cmodel.to("cpu")
+                                    del cmodel
+                                    del cmll
+                                    gc.collect()
+                                    torch.cuda.empty_cache()
+                                    memory_error = True
+                                    memory_error_count += 1
+                                else:
+                                    raise e
+                            except ModelFittingError:
+                                logger.warning(
+                                    f"In SCBO, ModelFittingError for constraint{icon}, previous fitted model will be used."
+                                )
+                                memory_error = False
+
                     # Update Cost model
                     gc.collect()
                     torch.cuda.empty_cache()
@@ -664,7 +727,7 @@ class SCBO(UnitMetaheuristic):
                     rdict["model"] = self.models_number
                     rdict["beam"] = len(self.train_obj)
 
-                    return new_x.cpu().numpy().tolist(), rdict
+                    return new_x.cpu().numpy().tolist(), rdict, {}
 
     def __getstate__(self):
         state = self.__dict__.copy()

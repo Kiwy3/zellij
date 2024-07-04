@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from zellij.strategies.tools.measurements import Measurement
 
 from itertools import product
+from scipy.stats import qmc
 import numpy as np
 
 import logging
@@ -73,6 +74,8 @@ class Hypercube(Fractal):
         level: int = 0,
         score: float = float("inf"),
         save_points=False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
     ):
         """__init__
 
@@ -95,6 +98,8 @@ class Hypercube(Fractal):
             level=level,
             score=score,
             save_points=save_points,
+            lower=lower,
+            upper=upper,
         )
 
     def create_children(self):
@@ -103,22 +108,28 @@ class Hypercube(Fractal):
         Partition function.
         """
 
-        children = super().create_children(2**self.size)
-
         center = (self.lower + self.upper) / 2
         vertices = np.array(list(product(*zip(self.lower, self.upper))))
         lower = np.minimum(vertices, center)
         upper = np.maximum(vertices, center)
 
-        for child, l, u in zip(children, lower, upper):
-            child.lower = l
-            child.upper = u
-            child._update_measure()
-
+        children = [
+            super(Hypercube, self).create_child(lower=l, upper=u)
+            for l, u in zip(lower, upper)
+        ]
         return children
 
-    def _modify(self, upper, lower, level, score, measure):
-        super()._modify(level, score, measure)
+    def _modify(
+        self,
+        upper: np.ndarray,
+        lower: np.ndarray,
+        level: int,
+        score: float,
+        measure: float,
+        best_loss: float,
+        best_loss_parent: float,
+    ):
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.upper, self.lower = upper, lower
 
     def _essential_info(self):
@@ -174,6 +185,8 @@ class Hypersphere(Fractal):
         level: int = 0,
         score: float = float("inf"),
         save_points=False,
+        center: Optional[np.ndarray] = None,
+        radius: Optional[np.ndarray] = None,
     ):
         """__init__
 
@@ -195,8 +208,15 @@ class Hypersphere(Fractal):
         super(Hypersphere, self).__init__(
             variables, measurement, level=level, score=score, save_points=save_points
         )
-        self.center = np.full(self.size, 0.5)
-        self.radius = 0.5
+        if center:
+            self.center = center
+        else:
+            self.center = np.full(self.size, 0.5)
+
+        if radius:
+            self.radius = radius
+        else:
+            self.radius = 0.5
 
     # Return a random point from the search space
     def random_point(self, size: Optional[int] = None) -> Union[list, List[list]]:
@@ -218,11 +238,9 @@ class Hypersphere(Fractal):
         Partition function
         """
 
-        children = super().create_children(2 * self.size)
-
         r_p = self.radius / (1 + np.sqrt(2))
 
-        centers = np.tile(self.center, (len(children), 1))
+        centers = np.tile(self.center, (2 * self.size, 1))
         centers[: len(self.center) :].ravel()[:: len(self.center) + 1] += (
             self.radius - r_p
         )
@@ -230,10 +248,10 @@ class Hypersphere(Fractal):
             self.radius - r_p
         )
 
-        for center, child in zip(centers, children):
-            child.center = center
-            child.radius = r_p
-            child._update_measure()
+        children = [
+            super(Hypersphere, self).create_child(center=c, radius=r_p)
+            for c in zip(centers)
+        ]
 
         return children
 
@@ -244,8 +262,10 @@ class Hypersphere(Fractal):
         level: int,
         score: float,
         measure: float,
+        best_loss: float,
+        best_loss_parent: float,
     ):
-        super()._modify(level, score, measure)
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.center, self.radius = center, radius
 
     def _essential_info(self):
@@ -313,6 +333,8 @@ class Section(Fractal):
         level: int = 0,
         score: float = float("inf"),
         save_points=False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
     ):
         """__init__
 
@@ -333,12 +355,15 @@ class Section(Fractal):
         """
 
         super(Section, self).__init__(
-            variables, measurement, level=level, score=score, save_points=save_points
+            variables,
+            measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
+            lower=lower,
+            upper=upper,
         )
-        self.lower = np.zeros(self.size)
-        self.upper = np.ones(self.size)
         self.section = section
-
         self.is_middle = False
 
     @property
@@ -360,8 +385,6 @@ class Section(Fractal):
         Partition function.
         """
 
-        children = super().create_children(self.section)
-
         longest = self.level % self.size
         width = self.upper[longest] - self.lower[longest]
 
@@ -374,18 +397,28 @@ class Section(Fractal):
         uppers[:, longest] = lowers[:, longest] + add[1:]
         lowers[:, longest] = lowers[:, longest] + add[:-1]
 
-        for idx, (l, u, child) in enumerate(zip(lowers, uppers, children)):
-            child.lower = l
-            child.upper = u
-            child.section = self.section
-            if self.section % 2 != 0 and int(self.section / 2) == idx:
-                child.is_middle = True
-            child._update_measure()
+        children = [
+            super(Section, self).create_child(lower=l, upper=u, section=self.section)
+            for l, u in zip(lowers, uppers)
+        ]
+
+        if self.section % 2 != 0:
+            children[int(self.section / 2)].is_middle = True
 
         return children
 
-    def _modify(self, upper, lower, level, is_middle, score, measure):
-        super()._modify(level, score, measure)
+    def _modify(
+        self,
+        upper: np.ndarray,
+        lower: np.ndarray,
+        level: int,
+        is_middle: bool,
+        score: float,
+        measure: float,
+        best_loss: float,
+        best_loss_parent: float,
+    ):
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.upper, self.lower = upper, lower
         self.is_middle = is_middle
 
@@ -407,6 +440,10 @@ class NMSOSection(Fractal):
         level: int = 0,
         score: float = float("inf"),
         save_points=False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
+        df: float = -float("inf"),
+        dx: float = 0,
     ):
         """__init__
 
@@ -427,18 +464,22 @@ class NMSOSection(Fractal):
         """
 
         super(NMSOSection, self).__init__(
-            variables, measurement, level=level, score=score, save_points=save_points
+            variables,
+            measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
+            lower=lower,
+            upper=upper,
         )
-        self.lower = np.zeros(self.size)
-        self.upper = np.ones(self.size)
         self.section = section
 
         self.left = False
         self.middle = False
         self.right = False
         self.is_middle = False
-        self.df = -float("inf")
-        self.dx = 0
+        self.df = df
+        self.dx = dx
         self.visited = float("inf")
 
     @property
@@ -460,8 +501,6 @@ class NMSOSection(Fractal):
         Partition function.
         """
 
-        children = super().create_children(self.section)
-
         longest = self.level % self.size
         width = self.upper[longest] - self.lower[longest]
 
@@ -478,16 +517,15 @@ class NMSOSection(Fractal):
         left = max(0, middle - 1)
         right = middle + 1
 
-        for idx, (l, u, child) in enumerate(zip(lowers, uppers, children)):
-            child.lower = l
-            child.upper = u
-            child.section = self.section
-            if self.section % 2 != 0 and middle == idx:
-                child.is_middle = True
-            child.dx = step
-            child.df = self.df
-            child._update_measure()
+        children = [
+            super(NMSOSection, self).create_child(
+                lower=l, upper=u, section=self.section, dx=step, df=self.df
+            )
+            for l, u in zip(lowers, uppers)
+        ]
 
+        if self.section % 2 != 0:
+            children[middle].is_middle = True
         children[middle].middle = True
         children[left].left = True
         children[right].right = True
@@ -496,19 +534,21 @@ class NMSOSection(Fractal):
 
     def _modify(
         self,
-        upper,
-        lower,
-        level,
-        left,
-        middle,
-        is_middle,
-        right,
-        df,
-        dx,
-        score,
-        measure,
+        upper: np.ndarray,
+        lower: np.ndarray,
+        level: int,
+        left: bool,
+        middle: bool,
+        is_middle: bool,
+        right: bool,
+        df: float,
+        dx: float,
+        score: float,
+        measure: float,
+        best_loss: float,
+        best_loss_parent: float,
     ):
-        super()._modify(level, score, measure)
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.upper, self.lower = upper, lower
         self.left = left
         self.middle = middle
@@ -566,6 +606,8 @@ class Direct(Fractal):
         measurement: Optional[Measurement] = None,
         level: int = 0,
         score: float = float("inf"),
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
     ):
         """__init__
 
@@ -584,7 +626,13 @@ class Direct(Fractal):
         """
 
         super(Direct, self).__init__(
-            variables, measurement, level=level, score=score, save_points=True
+            variables,
+            measurement,
+            level=level,
+            score=score,
+            save_points=True,
+            lower=lower,
+            upper=upper,
         )
         self.width = 1.0
         self.set_i = list(range(0, self.size))
@@ -605,14 +653,13 @@ class Direct(Fractal):
 
         """
         section_length = self.width / 3
-        if section_length > 1e-13:
+        if section_length > 1e-16:
             if self.level == 0:
                 scores = np.reshape(self.losses[1:], (-1, 2))
-                self.score = self.losses[0]
             else:
                 scores = np.reshape(self.losses, (-1, 2))
 
-            children = super().create_children((len(scores) - 1) * 2 + 3)
+            children = []
 
             scores_dim = scores.min(axis=1)
             argsort = np.argsort(scores_dim)
@@ -620,49 +667,39 @@ class Direct(Fractal):
             current_low = np.copy(self.lower)
             current_up = np.copy(self.upper)
 
-            for idx, arg in enumerate(argsort[:-1]):
+            for arg in argsort:
                 dim = self.set_i[arg]
-                c_idx = idx * 2
+                child1 = super(Direct, self).create_child(
+                    lower=np.copy(current_low),
+                    upper=np.copy(current_up),
+                )
+                child1.upper[dim] -= 2 * section_length
+                child1.score = scores[arg][0]
+                child1._update_attributes()
 
-                # 1st trisection
-                children[c_idx].lower = np.copy(current_low)
-                children[c_idx].upper = np.copy(current_up)
-                children[c_idx].upper[dim] -= 2 * section_length
-                children[c_idx].score = scores[arg][0]
-                children[c_idx]._update_attributes()
+                child2 = super(Direct, self).create_child(
+                    lower=np.copy(current_low),
+                    upper=np.copy(current_up),
+                )
+                child2.lower[dim] += 2 * section_length
+                child2.score = scores[arg][1]
+                child2._update_attributes()
 
-                # 3rd trisection
-                children[c_idx + 1].lower = np.copy(current_low)
-                children[c_idx + 1].upper = np.copy(current_up)
-                children[c_idx + 1].lower[dim] += 2 * section_length
-                children[c_idx + 1].score = scores[arg][1]
-                children[c_idx + 1]._update_attributes()
+                children.append(child1)
+                children.append(child2)
 
                 # Middle
                 current_low[dim] += section_length
                 current_up[dim] -= section_length
 
-            arg = argsort[-1]
-            dim = self.set_i[arg]
+            child3 = super(Direct, self).create_child(
+                lower=np.copy(current_low),
+                upper=np.copy(current_up),
+            )
+            child3.score = self.score
+            child3._update_attributes()
+            children.append(child3)
 
-            children[-3].lower = np.copy(current_low)
-            children[-3].upper = np.copy(current_up)
-            children[-3].upper[dim] -= 2 * section_length
-            children[-3].score = scores[arg][0]
-            children[-3]._update_attributes()
-
-            children[-2].lower = np.copy(current_low)
-            children[-2].upper = np.copy(current_up)
-            children[-2].lower[dim] += section_length
-            children[-2].upper[dim] -= section_length
-            children[-2].score = self.score
-            children[-2]._update_attributes()
-
-            children[-1].lower = np.copy(current_low)
-            children[-1].upper = np.copy(current_up)
-            children[-1].lower[dim] += 2 * section_length
-            children[-1].score = scores[arg][1]
-            children[-1]._update_attributes()
         else:
             children = []
 
@@ -677,8 +714,10 @@ class Direct(Fractal):
         level: int,
         score: float,
         measure: float,
+        best_loss: float,
+        best_loss_parent: float,
     ):
-        super()._modify(level, score, measure)
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.upper, self.lower = upper, lower
         self.width = width
         self.set_i = set_i
@@ -696,7 +735,7 @@ class Direct(Fractal):
         return infos
 
 
-class LatinHypercube(Hypercube):
+class LatinHypercube(Fractal):
     """LatinHypercube
 
     Subspaces are built according to a Latin Hypercube Sampling.
@@ -714,13 +753,22 @@ class LatinHypercube(Hypercube):
     def __init__(
         self,
         variables: ArrayVar,
+        max_depth: int,
         measurement: Optional[Measurement] = None,
         ndist: int = 1,
         grid_size: int = 2,
-        orthogonal: bool = False,
         level: int = 0,
         score: float = float("inf"),
         save_points=False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
+        length: float = 1,
+        ismid: bool = False,
+        descending: bool = True,
+        ascending_it=0,
+        expansions: int = 5,
+        mean: float = 0,
+        var: float = 1,
     ):
         """__init__
 
@@ -739,8 +787,6 @@ class LatinHypercube(Hypercube):
             Number of sampled distributions.
             Can be a callable of the form Callable[[int], int].
             A callable taking an int (level) and returning an int (number of distribution).
-        orthogonal : boolean, default=False
-            If True, performs an orthoganal LHS.
         symmetric : boolean, default=True
             Apply a symmetrization on the LatinHypercube distribution.
         measurement : Measurement, optional
@@ -752,13 +798,54 @@ class LatinHypercube(Hypercube):
         """
 
         super(LatinHypercube, self).__init__(
-            variables, measurement, level=level, score=score, save_points=save_points
+            variables,
+            measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
+            lower=lower,
+            upper=upper,
         )
 
         self.grid_size = grid_size
         self.ndist = ndist
+        self.length = length
+        self.ismid = ismid
+        self.max_depth = max_depth
 
-        self.orthogonal = orthogonal
+        self.expansions = expansions
+        self.expanded = 0
+        self.saved_var = np.full(expansions, var)
+        self.var = var
+        self.mean = mean
+
+        self.ascending_it = ascending_it
+        self.descending = descending
+
+        self.best_score_parent = float("inf")
+
+        self.rng = np.random.default_rng()
+
+        self.midchild = None
+
+    @property
+    def descending(self) -> bool:
+        return self._descending
+
+    @descending.setter
+    def descending(self, value: bool):
+        self._descending = value
+        if self._descending:
+            self.ascending_it = 0
+        elif self.ascending_it == 0 and self.level < self.max_depth:
+            length = 1
+            for i in range(0, self.max_depth):
+                length /= self.grid_size(length)
+            self.length = length
+            self.level = self.max_depth
+            center = self.upper - self.lower
+            self.lower = center - self.length / 2
+            self.upper = self.lower + length
 
     @property
     def grid_size(self) -> Callable:
@@ -768,8 +855,8 @@ class LatinHypercube(Hypercube):
     def grid_size(self, value: Union[int, Callable]):
         if callable(value):
             self._grid_size = value
-        elif value <= 1:
-            raise InitializationError(f"grid_size must be >1, got {value}")
+        elif value <= 1 and value % 2:
+            raise InitializationError(f"grid_size must be >1 and odd, got {value}")
         else:
             self._grid_size = lambda level: value
 
@@ -794,48 +881,151 @@ class LatinHypercube(Hypercube):
         attention collision grille paire
         """
 
+        self.expanded += 1
+
         ndist = self.ndist(self.level)
-        grid_size = self.grid_size(self.level)
 
-        children = Fractal.create_children(
-            self,
-            ndist * grid_size,
-            orthogonal=self.orthogonal,
-            grid_size=self.grid_size,
-            ndist=self.ndist,
-        )
+        if self.descending:
 
-        for nd in range(ndist):
-            A = np.zeros((self.size, grid_size), dtype=int)
+            grid_size = self.grid_size(self.level)
+            length = self.length / grid_size
 
-            R = np.zeros((grid_size + 1, self.size))
-            r = (self.upper - self.lower) / grid_size
+            mid = int(grid_size / 2)
 
-            for k in range(self.size):
-                A[k] = np.arange(0, grid_size, dtype=int)
-                np.random.shuffle(A[k])
+            range1 = np.arange(0, mid)
+            range2 = np.arange(mid + 1, grid_size)
+            combined_range = np.concatenate((range1, range2))
 
-            A = A.T
+            dimensions = np.tile(combined_range, (self.size * ndist, 1))
+            dimensions = self.rng.permuted(dimensions, axis=1, out=dimensions)
 
-            for k in range(grid_size):
-                for i in range(self.size):
-                    R[k, i] = (
-                        self.lower[i]
-                        + (self.upper[i] - self.lower[i]) * (k) / grid_size
+            lowers = np.tile(self.lower, ((grid_size - 1) * ndist, 1))
+
+            lowers = lowers + dimensions.T * length
+            uppers = lowers + length
+
+            children = [
+                super(LatinHypercube, self).create_child(
+                    max_depth=self.max_depth,
+                    length=length,
+                    lower=l,
+                    upper=u,
+                    ndist=self.ndist,
+                    grid_size=self.grid_size,
+                )
+                for l, u in zip(lowers, uppers)
+            ]
+
+            if self.midchild is None:
+                midlow = self.lower + length * mid
+                midupp = midlow + length
+
+                midchild = super(LatinHypercube, self).create_child(
+                    max_depth=self.max_depth,
+                    length=length,
+                    lower=midlow,
+                    upper=midupp,
+                    ndist=self.ndist,
+                    grid_size=self.grid_size,
+                    score=self.score,
+                    ismid=True,
+                )
+                midchild.best_loss = self.best_loss
+                self.midchild = midchild
+
+                if self.level == 0:
+                    children.append(self.midchild)
+
+            return children
+        else:
+            next_level = self.level - int(bool(self.ascending_it))
+            next_ascending = self.ascending_it + 1
+
+            if next_level > 0:
+                grid_size = self.grid_size(next_level)
+                ndist = self.ndist(next_level)
+
+                previous_length = 1
+                for i in range(0, next_level):
+                    previous_length /= self.grid_size(i)
+
+                mid = int(grid_size / 2)
+
+                range1 = np.arange(0, mid)
+                range2 = np.arange(mid + 1, grid_size)
+                combined_range = np.concatenate((range1, range2))
+
+                dimensions = np.tile(combined_range, (self.size * ndist, 1))
+                dimensions = self.rng.permuted(dimensions, axis=1, out=dimensions)
+
+                next_lower = self.lower - previous_length / 2
+                next_upper = next_lower + previous_length
+
+                clip_min = np.min(next_lower)
+                clip_max = np.max(next_upper)
+
+                if clip_max > 1:
+                    clip = 1 - clip_max
+                else:
+                    clip = 0
+
+                clip = min(clip_min, clip_max)
+
+                if clip < 0:
+                    previous_length -= clip
+                    next_lower = self.lower - previous_length / 2
+                    next_upper = next_lower + previous_length
+
+                lowers = np.tile(next_lower, ((grid_size - 1) * ndist, 1))
+
+                length = previous_length / grid_size
+                lowers = lowers + dimensions.T * length
+                uppers = lowers + length
+
+                children = [
+                    super(LatinHypercube, self).create_child(
+                        max_depth=self.max_depth,
+                        length=length,
+                        lower=l,
+                        upper=u,
+                        ndist=self.ndist,
+                        grid_size=self.grid_size,
+                        descending=False,
+                        ascending_it=next_ascending,
+                        level=next_level,
                     )
+                    for l, u in zip(lowers, uppers)
+                ]
 
-            Bd = np.zeros((grid_size, self.size))
-            sidx = nd * grid_size
-            eidx = sidx + grid_size
-            for k in range(grid_size):
-                for i in range(self.size):
-                    Bd[k, i] = R[A[k, i], i]
-            for child, l in zip(children[sidx:eidx], Bd):
-                child.lower = l
-                child.upper = l + r
-                child._update_measure()
+                if self.midchild is None:
+                    midlow = next_lower + length * mid
+                    midupp = midlow + length
 
-        return children
+                    midchild = super(LatinHypercube, self).create_child(
+                        max_depth=self.max_depth,
+                        length=length,
+                        lower=midlow,
+                        upper=midupp,
+                        ndist=self.ndist,
+                        grid_size=self.grid_size,
+                        score=self.score,
+                        ismid=True,
+                        descending=False,
+                        ascending_it=next_ascending,
+                        level=next_level,
+                    )
+                    midchild.best_loss = self.best_loss
+                    self.midchild = midchild
+                    if self.level == 0:
+                        children.append(self.midchild)
+
+                return children
+
+            else:
+                return []
+
+    def get_mid(self):
+        return self.midchild
 
     def _modify(
         self,
@@ -844,8 +1034,205 @@ class LatinHypercube(Hypercube):
         level: int,
         score: float,
         measure: float,
+        best_loss: float,
+        best_loss_parent: float,
     ):
-        Fractal._modify(self, level, score, measure)
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
+        self.upper, self.lower = upper, lower
+
+    def _essential_info(self):
+        infos = super()._essential_info()
+        infos.update({"upper": self.upper, "lower": self.lower})
+        return infos
+
+
+class LatinHypercubeUCB(Fractal):
+    """LatinHypercubeUCB
+
+    Subspaces are built according to a Latin Hypercube Sampling.
+
+
+    See Also
+    --------
+    LossFunc : Defines what a loss function is
+    Tree_search : Defines how to explore and exploit a fractal partition tree.
+    SearchSpace : Initial search space used to build fractal.
+    Fractal : Parent class. Basic object to define what a fractal is.
+    Hypersphere : Another hypervolume, with different properties
+    """
+
+    def __init__(
+        self,
+        variables: ArrayVar,
+        max_depth: int,
+        measurement: Optional[Measurement] = None,
+        grid_size: int = 2,
+        level: int = 0,
+        score: float = float("inf"),
+        save_points=False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
+        length: float = 1,
+        strength=1,
+        descending=True,
+        sampler=None,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        variables : ArrayVar
+            Determines the bounds of the search space.
+            For `ContinuousSearchspace` the `variables` must be an `ArrayVar`
+            of `FloatVar` and all must have converter.
+        grid_size : int, default=1
+            Size of the grid for LHS. :code:`self.size * grid_size` hypercubes will
+            be sampled. Given value must be :code:`grid_size > 1`.
+            Can be a callable of the form Callable[[int], int].
+            A callable taking an int (level) and returning an int (grid).
+        symmetric : boolean, default=True
+            Apply a symmetrization on the LatinHypercube distribution.
+        measurement : Measurement, optional
+            Defines the measure of a fractal.
+        level : int, optional
+            Set the default level of a fractal.
+        score : float, optional
+            Set the default score of a fractal.
+        """
+
+        super(LatinHypercubeUCB, self).__init__(
+            variables,
+            measurement,
+            level=level,
+            score=score,
+            save_points=save_points,
+            lower=lower,
+            upper=upper,
+        )
+
+        self.max_depth = max_depth
+        self.strength = strength
+        self.grid_size = grid_size
+        self.length = length
+
+        self.mean = float("inf")
+        self.var = float("inf")
+
+        self.best_score_parent = float("inf")
+
+        if sampler is None:
+            self.sampler = qmc.LatinHypercube(
+                d=self.size, scramble=False, strength=self.strength
+            )
+        else:
+            self.sampler = sampler
+
+        self.descending = descending
+
+    @property
+    def grid_size(self) -> int:
+        return self._grid_size
+
+    @grid_size.setter
+    def grid_size(self, value: int):
+        if value <= 1:
+            raise InitializationError(f"grid_size must be >1, got {value}")
+        else:
+            self._grid_size = value
+
+    def create_children(self):
+        """create_children(self)
+
+        Partition function.
+        """
+        if self.descending:
+            children = self._create_descending()
+        else:
+            children = self._create_ascending()
+
+        return children
+
+    def _create_descending(self):
+
+        length = self.length / self.grid_size
+
+        sample = self.sampler.random(n=self.grid_size)
+        sample = qmc.scale(sample, self.lower, self.upper)
+
+        l = length / 2
+        lowers = np.clip(sample - l, 0, 1)
+        uppers = np.clip(sample + l, 0, 1)
+
+        descending = (self.level + 1) < (self.max_depth - 1)
+
+        children = [
+            super(LatinHypercubeUCB, self).create_child(
+                length=length,
+                lower=l,
+                upper=u,
+                max_depth=self.max_depth,
+                grid_size=self.grid_size,
+                descending=descending,
+                strength=self.strength,
+                sampler=self.sampler,
+            )
+            for l, u in zip(lowers, uppers)
+        ]
+
+        return children
+
+    def _create_ascending(self):
+        previous_level = 1
+        next_level = 2
+
+        if previous_level > 0:
+
+            descending = True
+
+            previous_length = 1 / self.grid_size**previous_level
+
+            center = self.lower + (self.upper - self.lower)
+            l = previous_length / 2
+            lower = np.clip(center - l, 0, 1)
+            upper = np.clip(center + l, 0, 1)
+
+            sample = self.sampler.random(n=self.grid_size)
+            sample = qmc.scale(sample, lower, upper)
+
+            next_length = previous_length / self.grid_size
+            l = next_length / 2
+            lowers = np.clip(sample - l, 0, 1)
+            uppers = np.clip(sample + l, 0, 1)
+
+            children = [
+                super(LatinHypercubeUCB, self).create_child(
+                    length=next_length,
+                    lower=l,
+                    upper=u,
+                    max_depth=self.max_depth,
+                    grid_size=self.grid_size,
+                    descending=descending,
+                    level=next_level,
+                    sampler=self.sampler,
+                )
+                for l, u in zip(lowers, uppers)
+            ]
+
+            return children
+        else:
+            return []
+
+    def _modify(
+        self,
+        upper: np.ndarray,
+        lower: np.ndarray,
+        level: int,
+        score: float,
+        measure: float,
+        best_loss: float,
+        best_loss_parent: float,
+    ):
+        super()._modify(level, score, measure, best_loss, best_loss_parent)
         self.upper, self.lower = upper, lower
 
     def _essential_info(self):

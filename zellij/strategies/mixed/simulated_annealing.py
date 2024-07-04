@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 from zellij.core.errors import InputError
-from zellij.core.metaheuristic import Metaheuristic
+from zellij.core.metaheuristic import Metaheuristic, MonoObjective
 
 from typing import List, Tuple, Optional, TYPE_CHECKING
 
@@ -21,7 +21,7 @@ import logging
 logger = logging.getLogger("zellij.SA")
 
 
-class SimulatedAnnealing(Metaheuristic):
+class SimulatedAnnealing(Metaheuristic, MonoObjective):
     """SimulatedAnnealing
 
     SimulatedAnnealing (SA) is a hill climbing exploitation algorithm.
@@ -168,10 +168,10 @@ class SimulatedAnnealing(Metaheuristic):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of SA.
         SA is a local search and needs a starting point.
@@ -192,6 +192,8 @@ class SimulatedAnnealing(Metaheuristic):
             Additionnal information linked to :code:`points`
 
         """
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
 
         logger.info("Starting")
 
@@ -203,12 +205,16 @@ class SimulatedAnnealing(Metaheuristic):
                 "Simulated annealing must be initialized by at least one solution, X."
             )
         elif Y is None:
-            return X, {
-                "algorithm": "InitSA",
-                "temperature": -1,
-                "probability": -1,
-                "accepted": -1,
-            }
+            return (
+                X,
+                {
+                    "algorithm": "InitSA",
+                    "temperature": -1,
+                    "probability": -1,
+                    "accepted": -1,
+                },
+                {},
+            )
         else:
             argmin = np.argmin(Y)
             # current point
@@ -237,9 +243,13 @@ class SimulatedAnnealing(Metaheuristic):
             self.initialized = True
 
         logger.info("Ending")
-        return self.search_space.neighborhood([x_c], size=self.neighbors), {
-            "algorithm": "SA",
-            "temperature": self.cooling.Tcurrent,
-            "probability": emdst,
-            "accepted": self.x_loss_p,
-        }
+        return (
+            self.search_space.neighborhood([x_c], size=self.neighbors),
+            {
+                "algorithm": "SA",
+                "temperature": self.cooling.Tcurrent,
+                "probability": emdst,
+                "accepted": self.x_loss_p,
+            },
+            {},
+        )

@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 from zellij.core.errors import InitializationError
-from zellij.core.metaheuristic import ContinuousMetaheuristic
-from zellij.strategies.tools import Hypersphere, Section, Hypercube
+from zellij.core.metaheuristic import ContinuousMetaheuristic, MonoObjective
+from zellij.strategies.tools import Hypersphere, Section, Hypercube, LatinHypercubeUCB
 
 from typing import List, Tuple, Union, Optional
 
@@ -17,7 +17,7 @@ logger = logging.getLogger("zellij.ILS")
 
 
 # Intensive local search
-class ILS(ContinuousMetaheuristic):
+class ILS(ContinuousMetaheuristic, MonoObjective):
     """ILS
 
     Intensive local search is an exploitation algorithm comming from the
@@ -103,6 +103,7 @@ class ILS(ContinuousMetaheuristic):
         self.red_rate = red_rate
         self.inflation = inflation
         super().__init__(search_space, verbose)
+        self.xinfo = ["test", "fracid"]
 
         #############
         # VARIABLES #
@@ -156,22 +157,27 @@ class ILS(ContinuousMetaheuristic):
         self.current_score = float("inf")
         self.current_point = np.zeros(self.search_space.size)
 
-    def _one_step(self) -> Tuple[List[list], dict]:
+    def _one_step(self) -> Tuple[List[list], dict, dict]:
         points = np.tile(self.current_point, (2, 1))
         points[0, self.current_dim] += self.step
         points[1, self.current_dim] -= self.step
         points[:, self.current_dim] = np.clip(points[:, self.current_dim], 0.0, 1.0)
-        return points.tolist(), {"algorithm": "ILS"}
+
+        return (
+            points.tolist(),
+            {"algorithm": "ILS"},
+            {"test": np.arange(0, len(points)), "fracid": np.ones(len(points))},
+        )
 
     # RUN ILS
     def forward(
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of ILS.
         ILS is a local search, it uses the center of :ref:`sp` as
@@ -192,6 +198,9 @@ class ILS(ContinuousMetaheuristic):
             Additionnal information linked to :code:`points`
 
         """
+
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
 
         # logging
         logger.info("Starting")
@@ -229,7 +238,7 @@ class ILS(ContinuousMetaheuristic):
             return to_return
 
 
-class ILSRandom(ILS):
+class ILSRandom(ILS, MonoObjective):
     """ILSRandom
 
     Intensive local search is an exploitation algorithm comming from the
@@ -301,24 +310,24 @@ class ILSRandom(ILS):
         norm = np.linalg.norm(newp)
         return newp / norm
 
-    def _one_step(self) -> Tuple[List[list], dict]:
+    def _one_step(self) -> Tuple[List[list], dict, dict]:
         points = np.empty((2, self.search_space.size))
         newp = self.step * self.direction + self.current_point
         points[0] = newp
         points[1] = newp - self.step
         points = np.clip(points, 0.0, 1.0)
 
-        return points.tolist(), {"algorithm": "ILS_random"}
+        return points.tolist(), {"algorithm": "ILS_random"}, {}
 
     # RUN ILS
     def forward(
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of ILSRandom.
         ILS is a local search, it uses the center of :ref:`sp` as
@@ -339,6 +348,9 @@ class ILSRandom(ILS):
             Additionnal information linked to :code:`points`
 
         """
+
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
 
         # logging
         logger.info("Starting")
@@ -374,6 +386,194 @@ class ILSRandom(ILS):
                 self.direction = self._random_direction()
                 to_return = self._one_step()
 
+            self.current_dim += 1
+
+            logger.debug(f"Evaluating dimension {self.current_dim}")
+            logger.info("Ending")
+
+            return to_return
+
+
+# Intensive local search
+class ILSLHS(ContinuousMetaheuristic, MonoObjective):
+    """ILSLHS
+
+    Intensive local search is an exploitation algorithm comming from the
+    original FDA paper.
+    ILS is a local search, it uses the center of :ref:`sp` as
+    a starting point.
+
+    Attributes
+    ----------
+    search_space : Hypersphere
+        Hypersphere, Section or Hypercube.
+    red_rate : float, default=0.5
+        Determines the step reduction rate each time an improvement happens.
+    precision : flaot, default=1e-20
+        When :code:`step`<:code:`precision`, stops the algorithm.
+    verbose : boolean, default=True
+        Activate or deactivate the progress bar.
+
+    Methods
+    -------
+    forward(X, Y)
+        Runs one step of ILS
+
+    See Also
+    --------
+    Metaheuristic : Parent class defining what a Metaheuristic is.
+    LossFunc : Describes what a loss function is in Zellij
+    Searchspace : Describes what a loss function is in Zellij
+    """
+
+    def __init__(
+        self,
+        search_space: LatinHypercubeUCB,
+        red_rate: float = 0.5,
+        verbose: bool = True,
+    ):
+        """__init__
+
+        Parameters
+        ----------
+        search_space : LatinHypercubeUCB
+            An Hypersphere :ref:`sp`.
+        red_rate : float, default=0.5
+            Determines the step reduction rate at each solution improvement.
+        verbose : boolean, default=True
+            Algorithm verbosity
+
+        """
+
+        self.current_point = np.zeros(search_space.size)
+        self.radius = 0.0
+        self.step = 0.0
+        self.red_rate = red_rate
+        self.calls = 0
+
+        super().__init__(search_space, verbose)
+        self.xinfo = ["test", "fracid"]
+
+        #############
+        # VARIABLES #
+        #############
+        self.initialized = False
+        self.current_dim = 0
+        self.current_score = float("inf")
+        self.improvement = False
+
+    @property
+    def red_rate(self) -> float:
+        return self._red_rate
+
+    @red_rate.setter
+    def red_rate(self, value: float):
+        if value > 0:
+            self._red_rate = value
+        else:
+            raise InitializationError(f"red_rate must be >0. Got {value}.")
+
+    @ContinuousMetaheuristic.search_space.setter
+    def search_space(self, value: LatinHypercubeUCB):
+        if value:
+            if isinstance(value, LatinHypercubeUCB):
+                self._search_space = value
+                self.radius = self._search_space.length
+                self.step = self.radius
+                self.current_point = value.lower + (value.upper - value.lower) / 2
+                self.calls = 0
+            else:
+                raise InitializationError(
+                    f"Search space must be a Hyperpshere, Section, Hypercube, got {type(value)}."
+                )
+        else:
+            raise InitializationError(
+                f"Search space must be a Hyperpshere, Section, Hypercube, got {type(value)}."
+            )
+
+    def reset(self):
+        super().reset()
+
+        self.initialized = False
+        self.improvement = False
+        self.step = self.radius
+        self.current_dim = 0
+        self.current_score = float("inf")
+        self.search_space = self.search_space
+        self.calls = 0
+
+    def _one_step(self) -> Tuple[List[list], dict, dict]:
+        points = np.tile(self.current_point, (2, 1))
+        points[0, self.current_dim] += self.step
+        points[1, self.current_dim] -= self.step
+        points[:, self.current_dim] = np.clip(points[:, self.current_dim], 0.0, 1.0)
+
+        self.calls += len(points)
+        return (
+            points.tolist(),
+            {"algorithm": "ILSLHS"},
+            {"test": np.arange(0, len(points)), "fracid": np.ones(len(points))},
+        )
+
+    # RUN ILS
+    def forward(
+        self,
+        X: list,
+        Y: np.ndarray,
+        constraint: Optional[np.ndarray] = None,
+        info: Optional[np.ndarray] = None,
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
+        """
+        Runs one step of ILS.
+        ILS is a local search, it uses the center of :ref:`sp` as
+        a starting point.
+
+        Parameters
+        ----------
+        X : list
+            List of points.
+        Y : numpy.ndarray[float]
+            List of loss values.
+
+        Returns
+        -------
+        points
+            Return a list of new points to be computed with the :ref:`lf`.
+        info
+            Additionnal information linked to :code:`points`
+
+        """
+        if Y is not None:
+            Y = Y.squeeze(axis=1)
+
+        # logging
+        logger.info("Starting")
+
+        if self.initialized:
+            argmin = np.argmin(Y)
+
+            if Y[argmin] < self.current_score:
+                self.current_score = Y[argmin]
+                self.current_point = X[argmin]
+                self.improvement = True
+        else:
+            self.initialized = True
+
+        if self.current_dim >= self.search_space.size:
+            self.current_dim = 0
+            if self.improvement:
+                self.improvement = False
+            else:
+                self.step *= self.red_rate
+
+            logger.debug(f"Evaluating dimension {self.current_dim}")
+            logger.info("Ending")
+
+            return self._one_step()
+
+        else:
+            to_return = self._one_step()
             self.current_dim += 1
 
             logger.debug(f"Evaluating dimension {self.current_dim}")

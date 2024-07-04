@@ -208,7 +208,7 @@ class Calls(Threshold):
         super(Calls, self).__init__(loss, "calls", threshold)
 
     def __str__(self) -> str:
-        return f"|Tc|{self.attribute}:{getattr(self.target, self.attribute)}<={self.threshold:.5f}"
+        return f"|Tc|{self.attribute}:{getattr(self.target, self.attribute)}<={self.threshold}"
 
 
 class BooleanStop(Stopping):
@@ -297,6 +297,60 @@ class Time(Stopping):
         return f"|T|Elapsed Time:{elapsed}>={self.ttime}"
 
 
+class PercentageErrorConvergence(Stopping):
+    """PercentageErrorConvergence
+
+    Stoppping criterion based on convergence of errors. If the best current value within
+    :ref:`lf` and the actual optimum are sufficiently close. Then the optimization is stopped.
+
+    .. math::
+        pe = 100\\times\\frac{f(x)-f^{\\star}}{|f^{\\star}|}
+
+    If :code:`pe` is lower than :code:`epsilon`, then return True.
+
+    Parameters
+    ----------
+    epsilon : float
+        A positive float describing when the stopping criterion should return True.
+    optimum : float
+        Known optimum
+
+    Attributes
+    ----------
+    patience
+
+    """
+
+    def __init__(self, loss, epsilon, optimum):
+        super(PercentageErrorConvergence, self).__init__(loss, "best_score")
+
+        self.denom = 1  # denominator
+        self.epsilon = epsilon
+        self.pe = optimum
+
+        self._current_pe = float("inf")
+        self._current_best = float("inf")
+
+    @property
+    def pe(self):
+        return self._pe
+
+    @pe.setter
+    def pe(self, value):
+        if value == 0:
+            self._pe = lambda x: 100 * x
+        else:
+            self._pe = lambda x: 100 * (x - value) / np.abs(value)
+
+    def __call__(self):
+        self._current_best = getattr(self.target, self.attribute)
+        self._current_pe = self.pe(self._current_best)
+        return self._current_pe <= self.epsilon
+
+    def __str__(self) -> str:
+        return f"|T|Percentage Error:{self._current_pe:.2e}<={self.epsilon:.2e} | Best : {self._current_best:.2e}"
+
+
 class ErrorConvergence(Stopping):
     """ErrorConvergence
 
@@ -337,10 +391,7 @@ class ErrorConvergence(Stopping):
 
     @pe.setter
     def pe(self, value):
-        if value == 0:
-            self._pe = lambda x: 100 * x
-        else:
-            self._pe = lambda x: 100 * (x - value) / np.abs(value)
+        self._pe = lambda x: x - value
 
     def __call__(self):
         self._current_best = getattr(self.target, self.attribute)
@@ -348,4 +399,4 @@ class ErrorConvergence(Stopping):
         return self._current_pe <= self.epsilon
 
     def __str__(self) -> str:
-        return f"|T|Percentage Error:{self._current_pe:.5f}<={self.epsilon:.5f} | Best : {self._current_best:.5f}"
+        return f"|T|Error:{self._current_pe:.2e}<={self.epsilon:.2e} | Best : {self._current_best:.2e}"

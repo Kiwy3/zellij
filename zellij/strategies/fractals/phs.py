@@ -109,10 +109,10 @@ class PHS(ContinuousMetaheuristic):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of PHS.
         PHS does not use secondary and constraint.
@@ -134,7 +134,7 @@ class PHS(ContinuousMetaheuristic):
         """
 
         if self.computed:
-            return [], {"algorithm": "EndPHS"}
+            return [], {"algorithm": "EndPHS"}, {}
         else:
             points = np.tile(self.center, (3, 1))
             points[1] -= self.radius
@@ -142,7 +142,7 @@ class PHS(ContinuousMetaheuristic):
             points[1:] = np.clip(points[1:], 0.0, 1.0)
 
             self.computed = True
-            return points.tolist(), {"algorithm": "PHS"}
+            return points.tolist(), {"algorithm": "PHS"}, {}
 
     def reset(self):
         super().reset()

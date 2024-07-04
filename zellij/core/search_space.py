@@ -598,6 +598,8 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         save_points : bool, default=False
             Computed points within the fractal are saved.
         """
+        self.level = level
+
         super(BaseFractal, self).__init__(variables)
         self._compute_measure = measurement
 
@@ -607,7 +609,6 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
 
         self.measure = float("nan")
 
-        self.level = level
         self.score = score
         self.save_points = save_points
 
@@ -615,6 +616,9 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         self.losses = np.array([], dtype=float)
         self.secondary_loss = None
         self.constraint_val = None
+
+        self.best_loss = float("inf")
+        self.best_loss_parent = float("inf")
 
     def _update_measure(self):
         if self._compute_measure:
@@ -626,9 +630,29 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         self,
         X: list,
         Y: np.ndarray,
-        secondary: Optional[np.ndarray] = None,
-        constraint: Optional[np.ndarray] = None,
     ):
+        """add_solutions
+
+        Add computed solutions to the fractal.
+
+        Parameters
+        ----------
+            X : list[list[float]]
+                List of computed solutions.
+            Y : list[float]
+                Mono_objective. List of loss values associated to X.
+        """
+
+        min_idx = np.argmin(Y)
+
+        if Y[min_idx] < self.best_loss:
+            self.best_loss = Y[min_idx]
+        self.losses = np.append(self.losses, Y)
+
+        if self.save_points:
+            self.solutions.extend(X)
+
+    def empty_solutions(self):
         """add_solutions
 
         Add computed solutions to the fractal.
@@ -640,20 +664,14 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
             Y : list[float]
                 List of loss values associated to X.
         """
-        if self.save_points:
-            self.solutions.extend(X)
-            self.losses = np.append(self.losses, Y)
-            if secondary:
-                if self.secondary_loss:
-                    self.secondary_loss = np.vstack((self.secondary_loss, secondary))
-                else:
-                    self.secondary_loss = secondary
+        self.solutions = []
+        self.losses = np.array([], dtype=float)
+        self.secondary_loss = None
+        self.constraint_val = None
 
-            if constraint:
-                if self.constraint_val:
-                    self.constraint_val = np.vstack((self.constraint_val, constraint))
-                else:
-                    self.constraint_val = secondary
+    @abstractmethod
+    def create_child(self) -> BaseFractal:
+        pass
 
     @abstractmethod
     def create_children(self) -> Sequence[BaseFractal]:
@@ -664,6 +682,8 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         level: int,
         score: float,
         measure: float,
+        best_loss: float,
+        best_loss_parent: float,
     ):
         """_modify
 
@@ -676,12 +696,16 @@ class BaseFractal(Searchspace, metaclass=MetaFrac):
         self.measure = measure
         self.solutions = []
         self.losses = []
+        self.best_loss = best_loss
+        self.best_loss_parent = best_loss_parent
 
     def _essential_info(self) -> dict:
         return {
             "level": self.level,
             "score": self.score,
             "measure": self.measure,
+            "best_loss": self.best_loss,
+            "best_loss_parent": self.best_loss_parent,
         }
 
     def __repr__(self) -> str:
@@ -760,6 +784,8 @@ class Fractal(BaseFractal, UnitSearchspace):
         level: int = 0,
         score: float = float("inf"),
         save_points: bool = False,
+        lower: Optional[np.ndarray] = None,
+        upper: Optional[np.ndarray] = None,
     ):
         """__init__
 
@@ -779,6 +805,8 @@ class Fractal(BaseFractal, UnitSearchspace):
 
         """
         self._do_convert = False
+        self.lower = lower
+        self.upper = upper
         super(Fractal, self).__init__(
             variables=variables,
             measurement=measurement,
@@ -788,8 +816,61 @@ class Fractal(BaseFractal, UnitSearchspace):
         )
         self.distance = distance
 
-    def create_children(self: FR, k: int, *args, **kwargs) -> Sequence[FR]:
-        """create_children(self)
+    @Searchspace.variables.setter
+    def variables(self, value: ArrayVar):
+        if isinstance(value, ArrayVar):
+            if self.level == 0:
+                # Converter condition
+                conv_condition = (
+                    all(v.converter is not None for v in value) and value.converter
+                )
+
+                # Unit cube condition
+                unit_cond = True
+                cv = 0  # current value
+                while cv < self.size and unit_cond:
+                    v = value[cv]
+
+                    if isinstance(v, FloatVar):
+                        if v.lower != 0 or v.upper != 1:
+                            unit_cond = False
+                    else:
+                        unit_cond = False
+
+                    cv += 1
+
+                if unit_cond or conv_condition:
+                    self._variables = value
+                    self.lower = np.zeros(self.size)
+                    self.upper = np.ones(self.size)
+
+                    if conv_condition:
+                        self._do_convert = True
+                    else:
+                        self._do_convert = False
+
+                    if value.neighborhood:
+                        self._neighborhood = True
+                    else:
+                        self._neighborhood = False
+                else:
+                    raise InitializationError(
+                        f"In {type(self).__name__}, variables must be FloatVar within [0,1] defined within an ArrayVar, or have a converter."
+                    )
+            else:
+                self._variables = value
+                if self.lower is None:
+                    self.lower = np.zeros(self.size)
+                if self.upper is None:
+                    self.upper = np.ones(self.size)
+
+        else:
+            raise InitializationError(
+                f"In {type(self).__name__}, variables must be FloatVar within [0,1] defined within an ArrayVar, or have a converter."
+            )
+
+    def create_child(self: FR, *args, **kwargs) -> FR:
+        """create_child(self)
 
         Defines the partition function.
         Determines how children of the current space should be created.
@@ -802,20 +883,24 @@ class Fractal(BaseFractal, UnitSearchspace):
             Partition size
         """
 
-        next_level = self.level + 1
-        children = [
-            type(self)(
-                variables=self.variables,  # type: ignore
-                measurement=self._compute_measure,
-                level=next_level,
-                score=self.score,
-                *args,
-                **kwargs,
-            )
-            for _ in range(k)
-        ]
+        level = kwargs.pop("level", self.level + 1)
+        score = kwargs.pop("score", self.score)
 
-        return children
+        child = type(self)(
+            variables=self.variables,  # type: ignore
+            measurement=self._compute_measure,
+            level=level,
+            score=score,
+            save_points=self.save_points,
+            *args,
+            **kwargs,
+        )
+        child._do_convert = self._do_convert
+        child._neighborhood = self._neighborhood
+        child._update_measure()
+        child.best_loss_parent = self.best_loss
+
+        return child
 
     @property
     def distance(self) -> Distance:
@@ -900,7 +985,7 @@ class MixedFractal(BaseFractal, MixedSearchspace):
             save_points=save_points,
         )
 
-    def create_children(self: MFR, k: int, *args, **kwargs) -> Sequence[MFR]:
+    def create_child(self: MFR, *args, **kwargs) -> MFR:
         """create_children(self)
 
         Defines the partition function.
@@ -915,16 +1000,13 @@ class MixedFractal(BaseFractal, MixedSearchspace):
         """
 
         next_level = self.level + 1
-        children = [
-            type(self)(
-                variables=self.variables,
-                measurement=self._compute_measure,
-                level=next_level,
-                score=self.score,
-                *args,
-                **kwargs,
-            )
-            for _ in range(k)
-        ]
+        child = type(self)(
+            variables=self.variables,
+            measurement=self._compute_measure,
+            level=next_level,
+            score=self.score,
+            *args,
+            **kwargs,
+        )
 
-        return children
+        return child

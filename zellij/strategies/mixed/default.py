@@ -109,10 +109,10 @@ class Default(Metaheuristic):
         self,
         X: Optional[List[list]] = None,
         Y: Optional[np.ndarray] = None,
-        secondary: Optional[np.ndarray] = None,
         constraint: Optional[np.ndarray] = None,
         info: Optional[np.ndarray] = None,
-    ) -> Tuple[List[list], dict]:
+        xinfo: Optional[np.ndarray] = None,
+    ) -> Tuple[List[list], dict, dict]:
         """
         Runs one step of CGS.
 
@@ -134,4 +134,4 @@ class Default(Metaheuristic):
         infos = {"algorithm": "Default", "iteration": self.i}
         self.i += 1
 
-        return self.solutions, infos
+        return self.solutions, infos, {}

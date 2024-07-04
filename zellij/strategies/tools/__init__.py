@@ -21,6 +21,7 @@ from .geometry import (
     Section,
     Direct,
     LatinHypercube,
+    LatinHypercubeUCB,
     PermFractal,
     NMSOSection,
 )
@@ -38,6 +39,7 @@ from .tree_search import (
     MoveUp,
     CyclicBestFirstSearch,
     NMSOTreeSearch,
+    TSImprovement,
 )
 
 
@@ -55,6 +57,6 @@ from .scoring import (
 
 from .measurements import Level, Radius, Sigma2, SigmaInf
 
-from .turbo_state import AsyncTurboState, AsyncCTurboState, CTurboState
+from .turbo_state import TurboState, AsyncTurboState, AsyncCTurboState, CTurboState
 
 from .operators import DeapOnePoint, DeapTournament, NeighborMutation

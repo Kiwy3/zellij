@@ -35,6 +35,64 @@ logger = logging.getLogger("zellij.turbotools")
 
 
 @dataclass
+class TurboState:
+    dim: int
+    batch_size: int
+    length: float = 0.8
+    length_min: float = 0.5**7
+    length_max: float = 1.6
+    failure_counter: int = 0
+    failure_tolerance: int = 2
+    best_point: Optional[Tensor] = None
+    best_value: float = -float("inf")
+    success_counter: int = 0
+    success_tolerance: int = 2
+    restart_triggered: bool = False
+
+    def __post_init__(self):
+        self.best_point = torch.zeros(self.dim)
+
+    def reset(self):
+        self.length = 0.8
+        self.length_min = 0.5**7
+        self.length_max = 1.6
+        self.failure_counter = 0
+        self.failure_tolerance = 2
+        self.success_counter = 0
+        self.success_tolerance = 2
+        self.restart_triggered = False
+
+
+def update_state(state, X_next, Y_next):
+    best_idx = get_best_index_for_batch(Y=Y_next)
+    x_next = X_next[best_idx]
+    y_next = Y_next[best_idx]
+
+    if not np.isfinite(state.best_value):
+        state.best_point = torch.Tensor(x_next)
+        state.best_value = y_next.item()
+    elif y_next > state.best_value + 1e-5 * math.fabs(state.best_value):
+        state.best_point = torch.Tensor(x_next)
+        state.best_value = y_next.item()
+        state.success_counter += 1
+        state.failure_counter = 0
+    else:
+        state.success_counter = 0
+        state.failure_counter += 1
+
+    if state.success_counter == state.success_tolerance:  # Expand trust region
+        state.length = min(2.0 * state.length, state.length_max)
+        state.success_counter = 0
+    elif state.failure_counter == state.failure_tolerance:  # Shrink trust region
+        state.length /= 2.0
+        state.failure_counter = 0
+
+    if state.length < state.length_min:
+        state.restart_triggered = True
+    return state
+
+
+@dataclass
 class AsyncTurboState:
     dim: int
     batch_size: int
@@ -112,7 +170,10 @@ def async_update_state(state, X_next, Y_next, lengths, successes, failures, eps=
     # At least one new candidate is feasible
     p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
     # In TR
-    if y_next > p_improvement_threshold:
+    if not np.isfinite(state.best_value):
+        state.best_point = torch.Tensor(x_next)
+        state.best_value = y_next.item()
+    elif y_next > p_improvement_threshold:
         state.best_point = torch.Tensor(x_next)
         state.best_value = y_next.item()
         if in_tr_x:
@@ -242,7 +303,10 @@ def update_c_state(state, Y_next, C_next):
     if (c_next <= 0).all():
         # At least one new candidate is feasible
         improvement_threshold = state.best_value + 1e-3 * math.fabs(state.best_value)
-        if y_next > improvement_threshold or (state.best_constraint_values > 0).any():
+        if not np.isfinite(state.best_value):
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+        elif y_next > improvement_threshold or (state.best_constraint_values > 0).any():
             state.success_counter += 1
             state.failure_counter = 0
             state.best_value = y_next.item()
@@ -348,7 +412,13 @@ def async_update_c_state(
         # At least one new candidate is feasible
         p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
         # In TR
-        if y_next > p_improvement_threshold or (state.best_constraint_values > 0).any():
+        if not np.isfinite(state.best_value):
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+        elif (
+            y_next > p_improvement_threshold or (state.best_constraint_values > 0).any()
+        ):
             state.best_point = torch.Tensor(x_next)
             state.best_value = y_next.item()
             state.best_constraint_values = torch.Tensor(c_next)
@@ -496,7 +566,14 @@ def iupdate_c_state(
         # At least one new candidate is feasible
         p_improvement_threshold = state.best_value + eps * math.fabs(state.best_value)
         # In TR
-        if y_next > p_improvement_threshold or (state.best_constraint_values > 0).any():
+        if not np.isfinite(state.best_value):
+            state.best_point = torch.Tensor(x_next)
+            state.best_value = y_next.item()
+            state.best_constraint_values = torch.Tensor(c_next)
+            state.best_cost = cost_next.item()
+        elif (
+            y_next > p_improvement_threshold or (state.best_constraint_values > 0).any()
+        ):
             state.best_point = torch.Tensor(x_next)
             state.best_value = y_next.item()
             state.best_constraint_values = torch.Tensor(c_next)
