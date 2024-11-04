@@ -59,7 +59,11 @@ class TestTreeSearch(unittest.TestCase):
 
     def test_tree_search_algorithms(self):
 
+<<<<<<< Updated upstream
         for t in tree_search_algorithm:
+=======
+        for t in tree_search_algorithm.values():
+>>>>>>> Stashed changes
             ts = t([self.element], 10)
 
             self.assertTrue(
@@ -123,7 +127,10 @@ class TestTreeSearch(unittest.TestCase):
                 go,
                 f"Error on ending for children,\nFor {ts.__class__.__name__}",
             )
+<<<<<<< Updated upstream
 
 
 if __name__ == "__main__":
     unittest.main()
+=======
+>>>>>>> Stashed changes

@@ -8,6 +8,11 @@ fit with the *Zellij* definition of a fractal. Indeed, here the partition,
 the exploration and the scoring are the same function. DIRECT requires to
 sample each center of future subset, before concretely creating them.
 
+.. warning:: 
+  The original FORTRAN version of DIRECT is faster and might works better. This version is a proof of concept.
+  As DIRECT considers centers of subspaces and not actual subspaces. The :code:`Potentially_Optimal_Rectangle`
+  and its variations takes the most time.
+
 In *Zellij*, DIRECT is decomposed as follow:
 
 * **Geometry**: DIRECT (Partition, sample and score at the same time)
@@ -20,84 +25,56 @@ In *Zellij*, DIRECT is decomposed as follow:
 .. [1] D. R. Jones, C. D. Perttunen, and B. E. Stuckman, ‘Lipschitzian optimization without the Lipschitz constant’, J Optim Theory Appl, vol. 79, no. 1, pp. 157–181, Oct. 1993, doi: 10.1007/BF00941892.
 .. [2] Finkel, Daniel E.. “Direct optimization algorithm user guide.” (2003).
 
+.. warning:: 
+  The following code is deprecated.
+
 .. code-block:: python
 
   <code>
 
-  from zellij.core.geometry import Direct
-  from zellij.strategies import DBA
-  from zellij.strategies.tools.tree_search import Potentially_Optimal_Rectangle
-  from zellij.strategies.tools.direct_utils import Sigma2, SigmaInf
-
-  from zellij.core import ContinuousSearchspace, FloatVar, ArrayVar, Loss
+  from zellij.core import ArrayVar, FloatVar, Loss, Experiment, Threshold, BooleanStop
   from zellij.utils.benchmarks import himmelblau
+  from zellij.strategies import DBA_Direct, DirectSampling
+  from zellij.strategies.tools import Direct, Nothing, Potentially_Optimal_Rectangle
+  from zellij.utils.converters import FloatMinmax, ArrayConverter, Basic
 
-  loss = Loss()(himmelblau)
+  lf = Loss(save=True)(himmelblau)
   values = ArrayVar(
-                    FloatVar("a",-5,5),
-                    FloatVar("b",-5,5)
-                    )
+      FloatVar("float_1", -5 , 5, converter=FloatMinmax()),
+      FloatVar("float_2", -5, 5, converter=FloatMinmax()),
+      converter=ArrayConverter(),
+  )
+  sp = Direct(values, lf, converter=Basic())
 
-  def Direct_al(
-    values,
-    loss,
-    calls,
-    verbose=True,
-    level=600,
-    error=1e-4,
-    maxdiv=3000,
-    force_convert=False,
-  ):
+  explor = DirectSampling(sp)
+  stop1 = BooleanStop(explor, "computed")  # set target to None, DBA will automatically asign it.
+  dba = DBA_Direct(sp, Potentially_Optimal_Rectangle(sp,600),(explor,stop1),scoring=Nothing())
 
-    sp = Direct(
-        values,
-        loss,
-        calls,
-        sigma=Sigma2(len(values)),
-    )
+  stop2 = Threshold(lf, "calls",1000)
+  exp = Experiment(dba, stop2, save="exp_direct")
+  exp.run()
+  print(f"Best solution:f({lf.best_point})={lf.best_score}")
 
-    dba = DBA(
-        sp,
-        calls,
-            tree_search=Potentially_Optimal_Rectangle(
-            sp, level, error=error, maxdiv=maxdiv
-        ),
-        verbose=verbose,
-    )
-    dba.run()
 
-    return sp
 
-  sp = Direct_al(values, loss, 1000)
-  best = (sp.loss.best_point, sp.loss.best_score)
-  print(f"Best solution found:f({best[0]})={best[1]}")
-
+  import pandas as pd
   import matplotlib.pyplot as plt
   import numpy as np
+
+  data = pd.read_csv("exp_direct/outputs/all_evaluations.csv")
+  print(data)
 
   fig, ax = plt.subplots()
   x = y = np.linspace(-5, 5, 100)
   X,Y = np.meshgrid(x,y)
-  Z = (X**4-16*X**2+5*X + Y**4-16*Y**2+5*Y)/2
+  Z = (X ** 2 + Y - 11) ** 2 + (X + Y ** 2 - 7) ** 2
+
 
   map = ax.contourf(X,Y,Z,cmap="plasma", levels=100)
   fig.colorbar(map)
-  ax.scatter(
-              np.array(sp.loss.all_solutions)[:,0],
-              np.array(sp.loss.all_solutions)[:,1],
-              s=1,
-              label="Points"
-            )
-  ax.scatter(
-              best[0][0],
-              best[0][1],
-              c="red",
-              s=5,
-              label="Best"
-            )
-  ax.set_title("DIRECT on 2D Himmelblau function")
-  ax.legend()
-  plt.show()
+
+  plt.scatter(data["float_1"],data["float_2"],c="cyan",s=0.1)
+  plt.plot()
 
 .. image:: ../sources/direct_himmel.png
   :width: 2400
