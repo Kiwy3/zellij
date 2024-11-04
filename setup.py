@@ -66,5 +66,5 @@ setuptools.setup(
         "mpi": ["mpi4py>=3.1.2"],
         "docs": docs_extras,
     },
-    python_requires=">=3.10",
+    python_requires=">=3.9",
 )
